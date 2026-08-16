@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        let LL={xy2gps:function(b,a){let p1=[];let p2=[];for(let item of a.data){p1.push(item.x,item.y);let xy;if(a.proj=="gaosi"){xy=LL.gaosi.proj(item.L,item.B,a.center)}else{xy=LL.utm.proj(item.L,item.B,a.center)}p2.push(xy.x,xy.y)}let cs=LL.cs4(p1,p2);let LBS=[];let roads=a["roads"];let roadList=new RoadList();roadList.options.optionsData=[{"value":'第一项',"label":b}];let nts=1;let sumk=0;for(let road of roads){if("jd"in road){road.pqx=[];let{listXY1}=LL.jd.calculateMainPointMileages(road);for(let item of listXY1){item[4]=Number(LL.jd.decimalToDMS(item[4]));road.pqx.push(item.slice(1,item.length))}}let name=road.name;let DL;if("DL"in road){DL=road.DL}else{DL=[]}if(!("pqx"in road))continue;let pqx=road.pqx;let lonlatfwj=LL.dantiaoxianlu(pqx,20,0,DL);for(let item of lonlatfwj){let x=item[0];let y=item[1];let x1=cs.dx+cs.scale*(x*Math.cos(cs.rota)-y*Math.sin(cs.rota));let y1=cs.dy+cs.scale*(x*Math.sin(cs.rota)+y*Math.cos(cs.rota));let LB;if(a.proj=="gaosi"){LB=LL.gaosi.unproj(x1,y1,a.center)}else{LB=LL.utm.unproj(x1,y1,a.center,a.south)}item[0]=LB.L;item[1]=LB.B;item[3]=item[3]*57.296}LBS.push({name,lonlatfwj});let endk=pqx[pqx.length-1][0]+pqx[pqx.length-1][4];sumk+=(endk-pqx[0][0]);roadList.options.optionsData.push({value:JSON.stringify(lonlatfwj),label:nts+":"+name+" "+((endk-pqx[0][0])/1000).toFixed(2)+"km"});nts++}roadList.options.optionsData.push({"value":'第一项',label:'∑:'+sumk.toFixed(1)+'m'});roadList.addTo(map);roadList.getContainer().style.display='none';projectAll.push(roadList);return LBS},num2k:function(n){const k=Math.floor(n/1000);const remainder=n-k*1000;let remainderStr;if(Number.isInteger(remainder)){remainderStr=remainder.toString().padStart(3,'0')}else{const[integerPart,decimalPart]=remainder.toString().split('.');const paddedInteger=integerPart.padStart(3,'0');remainderStr=`${paddedInteger}.${decimalPart.slice(0,3)}`}return`K${k}+${remainderStr}`},dmsToRadians:function(dms){let degrees=Math.floor(dms);let fractional=dms-degrees;let minutes=Math.floor(fractional*100);let seconds=(fractional*100-minutes)*100;let totalDegrees=degrees+minutes/60.0+seconds/3600.0;return totalDegrees*Math.PI/180},radiansToDMS:function(radians){const degrees=radians*(180/Math.PI);const d=Math.floor(degrees);const remaining=(degrees-d)*60;const m=Math.floor(remaining);const s=(remaining-m)*60;return`${d}°${m}′${s.toFixed(2)}″`},DL:function(k,DL){let deltk=0;for(let d1 of DL){if(k>d1[0]){deltk+=d1[1]-d1[0]}}return deltk},fwj:function(x0,y0,x1,y1){let x=x1-x0;let y=y1-y0;let cd=Math.sqrt(x*x+y*y);let hd=Math.atan2(y,x);if(hd<0){hd+=2*Math.PI}return[cd,hd]},cs4:function(source,target){if(source===null||target===null||source.length!==target.length){throw new Error("坐标数组长度必须相等");}if(source.length<4||source.length%2!==0){throw new Error("至少需要2个点且坐标为偶数");}let pointCount=source.length/2;let sumX1=0,sumY1=0,sumX2=0,sumY2=0;for(let i=0;i<pointCount;i++){sumX1+=source[2*i];sumY1+=source[2*i+1];sumX2+=target[2*i];sumY2+=target[2*i+1]}let meanX1=sumX1/pointCount;let meanY1=sumY1/pointCount;let meanX2=sumX2/pointCount;let meanY2=sumY2/pointCount;let centeredSource=new Array(source.length);let centeredTarget=new Array(target.length);for(let i=0;i<pointCount;i++){centeredSource[2*i]=source[2*i]-meanX1;centeredSource[2*i+1]=source[2*i+1]-meanY1;centeredTarget[2*i]=target[2*i]-meanX2;centeredTarget[2*i+1]=target[2*i+1]-meanY2}let H11=0,H12=0,H21=0,H22=0;let B1=0,B2=0;for(let i=0;i<pointCount;i++){let x1=centeredSource[2*i];let y1=centeredSource[2*i+1];let x2=centeredTarget[2*i];let y2=centeredTarget[2*i+1];H11+=x1*x1+y1*y1;H12+=0;H21+=0;H22+=x1*x1+y1*y1;B1+=x1*x2+y1*y2;B2+=x1*y2-y1*x2}let det=H11*H22-H12*H21;if(Math.abs(det)<1e-15){throw new Error("矩阵奇异，无法求解参数");}let a=(H22*B1-H12*B2)/det;let b=(-H21*B1+H11*B2)/det;let scale=Math.sqrt(a*a+b*b);let rotation=Math.atan2(b,a);let deltaX=meanX2-(a*meanX1-b*meanY1);let deltaY=meanY2-(b*meanX1+a*meanY1);return{dx:deltaX,dy:deltaY,rota:rotation,scale:scale}},zs:function(xyk,xyx,xyy,xyhd,xycd,xyqdr,xyzdr,xyzy,jsk,jsb,jd){let fhz;if(Math.abs(xyqdr-xyzdr)<0.01&&xyqdr!==0){let centerX=xyx+xyqdr*Math.cos(xyhd+xyzy*Math.PI/2);let centerY=xyy+xyqdr*Math.sin(xyhd+xyzy*Math.PI/2);let deltaArcLength=jsk-xyk;let deltaAngle=deltaArcLength/xyqdr*xyzy;let targetAzimuth=xyhd+deltaAngle;if(targetAzimuth<0)targetAzimuth+=2*Math.PI;let angle=xyhd+xyzy*Math.PI/2+deltaAngle;let targetX=centerX-xyqdr*Math.cos(angle)+jsb*Math.cos(angle-xyzy*Math.PI/2+jd*Math.PI/180);let targetY=centerY-xyqdr*Math.sin(angle)+jsb*Math.sin(angle-xyzy*Math.PI/2+jd*Math.PI/180);fhz=[targetX,targetY,targetAzimuth];fhz.x=targetX;fhz.y=targetY;fhz.fwj=targetAzimuth*180/Math.PI;fhz.rad=targetAzimuth;return fhz}if(xyqdr<0.01&&xyzdr<0.01&&xyzy<0.01){let targetX=xyx+(jsk-xyk)*Math.cos(xyhd)+jsb*Math.cos(xyhd+jd*Math.PI/180);let targetY=xyy+(jsk-xyk)*Math.sin(xyhd)+jsb*Math.sin(xyhd+jd*Math.PI/180);fhz=[targetX,targetY,xyhd];fhz.x=targetX;fhz.y=targetY;fhz.fwj=xyhd*180/Math.PI;fhz.rad=xyhd;return fhz}if(xyqdr===0)xyqdr=99999999;if(xyzdr===0)xyzdr=99999999;let f0=xyhd;let q=xyzy;let c=1/xyqdr;let d=(xyqdr-xyzdr)/(2*xycd*xyqdr*xyzdr);let rr=new Array(5);let vv=new Array(5);rr[1]=0.1739274226;rr[2]=0.3260725774;rr[3]=rr[2];rr[4]=rr[1];vv[1]=0.0694318442;vv[2]=0.3300094782;vv[3]=1-vv[2];vv[4]=1-vv[1];let w=jsk-xyk;let xs=0;let ys=0;for(let i=1;i<5;i++){let ff=f0+q*vv[i]*w*(c+vv[i]*w*d);xs+=rr[i]*Math.cos(ff);ys+=rr[i]*Math.sin(ff)}let fhz3=f0+q*w*(c+w*d);if(fhz3<0)fhz3+=2*Math.PI;if(fhz3>=2*Math.PI)fhz3-=2*Math.PI;let fhz1=xyx+w*xs+jsb*Math.cos(fhz3+jd*Math.PI/180);let fhz2=xyy+w*ys+jsb*Math.sin(fhz3+jd*Math.PI/180);fhz=[fhz1,fhz2,fhz3];fhz.x=fhz1;fhz.y=fhz2;fhz.fwj=fhz3*180/Math.PI;fhz.rad=fhz3;return fhz},dantiaoxianludange:function(pqx,k,b,z,DL=[]){let hang=pqx.length-1;let qdlc=pqx[0][0];let zdlc=pqx[hang][0]+pqx[hang][4];for(let i=0;i<pqx.length;i++){let dtk=pqx[i][0];let dtx=pqx[i][1];let dty=pqx[i][2];let dtfwj=pqx[i][3];let dtcd=pqx[i][4];let dtr1=pqx[i][5];let dtr2=pqx[i][6];let dtzy=pqx[i][7];let deltk=this.DL(k,DL);k+=deltk;if(k>=dtk&&k<=dtk+dtcd){let hudu=this.dmsToRadians(dtfwj);let jsxy1=this.zs(dtk,dtx,dty,hudu,dtcd,dtr1,dtr2,dtzy,k,b,z);return jsxy1}}return[pqx[0][1],pqx[0][2],pqx[0][3]]},dantiaoxianlu:function(pqx,jiange,kuandu,DL=[]){let xy=[];let hang=pqx.length-1;let qdlc=pqx[0][0];let zdlc=pqx[hang][0]+pqx[hang][4];let sk=qdlc;let ek=zdlc;if(!Number.isInteger(sk)){sk=Math.floor(sk);sk=Math.round(sk+jiange-sk%jiange)}let k=sk;while(k<=ek){for(let i=0;i<pqx.length;i++){let dtk=pqx[i][0];let dtx=pqx[i][1];let dty=pqx[i][2];let dtfwj=pqx[i][3];let dtcd=pqx[i][4];let dtr1=pqx[i][5];let dtr2=pqx[i][6];let dtzy=pqx[i][7];while(k>=dtk&&k<=dtk+dtcd){let hudu=this.dmsToRadians(dtfwj);let jsxy1=this.zs(dtk,dtx,dty,hudu,dtcd,dtr1,dtr2,dtzy,k,kuandu,90);let deltk=this.DL(k,DL);xy.push([jsxy1[0],jsxy1[1],k+deltk,jsxy1[2]]);let k1=Math.round((k+deltk)*1000)/1000;if(k1%jiange>0.01){k1=Math.floor(k1);k1=Math.round(k1+jiange-k1%jiange);k=k1+jiange-deltk}else{k+=jiange}}}}let jsxy1=this.dantiaoxianludange(pqx,ek,kuandu,90);let deltk=this.DL(ek,DL);xy.push([jsxy1[0],jsxy1[1],Math.round((ek+deltk)*100)/100,jsxy1[2]]);return xy},fs:function(pqx,fsx,fsy){let fsjieguo={k:0,b:0,x:0,y:0,cs:1};let jljd=this.fwj(pqx[0][1],pqx[0][2],fsx,fsy);let k=pqx[0][0];let hudu=this.dmsToRadians(pqx[0][3]);let cz=jljd[0]*Math.cos(jljd[1]-hudu);let pj=jljd[0]*Math.sin(jljd[1]-hudu);let hang=(pqx.length)-1;let qdlc=pqx[0][0];let zdlc=pqx[hang][0]+pqx[hang][4];let jisuancishu=0;while(Math.abs(cz)>0.01){k=k+cz;jisuancishu+=1;if(k<qdlc){fsjieguo.k=qdlc;fsjieguo.b="距起点";fsjieguo.x=pqx[0][1];fsjieguo.y=pqx[0][2];fsjieguo.cs=jisuancishu;return fsjieguo}if(k>zdlc){let xy=this.dantiaoxianludange(pqx,zdlc,0,0);fsjieguo.k=zdlc;fsjieguo.b="距终点";fsjieguo.x=xy.x;fsjieguo.y=xy.y;fsjieguo.cs=jisuancishu;return fsjieguo}if(jisuancishu>15){fsjieguo.k="超出";fsjieguo.b="超出";fsjieguo.cs=jisuancishu;return fsjieguo}let xy=this.dantiaoxianludange(pqx,k,0,0,[]);jljd=this.fwj(xy.x,xy.y,fsx,fsy);cz=jljd[0]*Math.cos(jljd[1]-xy.rad);pj=jljd[0]*Math.sin(jljd[1]-xy.rad)}fsjieguo.k=k;fsjieguo.b=pj;fsjieguo.cs=jisuancishu;return fsjieguo},utm:{proj:function(lngd,lat,center){const K=1;const K0=0.9996;const DRAD=Math.PI/180;const datum={eqRad:6378137.0,flat:298.2572236};let a=datum.eqRad;let f=1/datum.flat;let b=a*(1-f);let e=Math.sqrt(1-Math.pow(b,2)/Math.pow(a,2));let e0=e/Math.sqrt(1-Math.pow(e,1));let phi=lat*DRAD;let lng=lngd*DRAD;let utmz=1+Math.floor((center+180)/6);let zcm=3+6*(utmz-1)-180;let latz=0;let esq=(1-(b/a)*(b/a));let e0sq=e*e/(1-Math.pow(e,2));let M=0;if(lat>-80&&lat<72){latz=Math.floor((lat+80)/8)+2}if(lat>72&&lat<84){latz=21}else if(lat>84){latz=23}let N=a/Math.sqrt(1-Math.pow(e*Math.sin(phi),2));let T=Math.pow(Math.tan(phi),2);let C=e0sq*Math.pow(Math.cos(phi),2);let A=(lngd-zcm)*DRAD*Math.cos(phi);M=phi*(1-esq*(1/4+esq*(3/64+5*esq/256)));M=M-Math.sin(2*phi)*(esq*(3/8+esq*(3/32+45*esq/1024)));M=M+Math.sin(4*phi)*(esq*esq*(15/256+esq*45/1024));M=M-Math.sin(6*phi)*(esq*esq*esq*(35/3072));M=M*a;let M0=0;let x=K0*N*A*(1+A*A*((1-T+C)/6+A*A*(5-18*T+T*T+72*C-58*e0sq)/120));x=x+500000;y=K0*(M-M0+N*Math.tan(phi)*(A*A*(1/2+A*A*((5-T+9*C+4*C*C)/24+A*A*(61-58*T+T*T+600*C-330*e0sq)/720))));if(y<0){y=10000000+y}return{east:x,north:y,x:y,y:x}},unproj:function(y,x,center,southern){const K=1;const K0=0.9996;const DRAD=Math.PI/180;const datum={eqRad:6378137.0,flat:298.2572236};let a=datum.eqRad;let f=1/datum.flat;let b=a*(1-f);let e=Math.sqrt(1-Math.pow(b,2)/Math.pow(a,2));let e0=e/Math.sqrt(1-Math.pow(e,1));let esq=(1-(b/a)*(b/a));let e0sq=e*e/(1-Math.pow(e,2));let zcm;let utmz=1+Math.floor((center+180)/6);zcm=3+6*(utmz-1)-180;let e1=(1-Math.sqrt(1-Math.pow(e,2)))/(1+Math.sqrt(1-Math.pow(e,2)));let M0=0;let M=0;if(!southern)M=M0+y/K0;else M=M0+(y-10000000)/K;let mu=M/(a*(1-esq*(1/4+esq*(3/64+5*esq/256))));let phi1=mu+e1*(3/2-27*e1*e1/32)*Math.sin(2*mu)+e1*e1*(21/16-55*e1*e1/32)*Math.sin(4*mu);phi1=phi1+e1*e1*e1*(Math.sin(6*mu)*151/96+e1*Math.sin(8*mu)*1097/512);let C1=e0sq*Math.pow(Math.cos(phi1),2);let T1=Math.pow(Math.tan(phi1),2);let N1=a/Math.sqrt(1-Math.pow(e*Math.sin(phi1),2));let R1=N1*(1-Math.pow(e,2))/(1-Math.pow(e*Math.sin(phi1),2));let D=(x-500000)/(N1*K0);let phi=(D*D)*(1/2-D*D*(5+3*T1+10*C1-4*C1*C1-9*e0sq)/24);phi=phi+Math.pow(D,6)*(61+90*T1+298*C1+45*T1*T1-252*e0sq-3*C1*C1)/720;phi=phi1-(N1*Math.tan(phi1)/R1)*phi;let lat=Math.floor(1000000*phi/DRAD)/1000000;let lng=D*(1+D*D*((-1-2*T1-C1)/6+D*D*(5-2*C1+28*T1-3*C1*C1+8*e0sq+24*T1*T1)/120))/Math.cos(phi1);let lngd=zcm+lng/DRAD;lng=lngd;return{lat:lat,lon:lng,B:lat,L:lng}}},gaosi:{proj:function(L,B,lonCenter){const pi=3.141592653589793238463;const p0=206264.8062470963551564;let e=0.00669438002290;let e1=0.00673949677548;let b=6356752.3141;let a=6378137.0;let cos=Math.cos;let sin=Math.sin;let tan=Math.tan;let pow=Math.pow;let sqrt=Math.sqrt;B=B*pi/180;L=L*pi/180;let N,t,n,c,V,Xz,m1,m2,m3,m4,m5,m6,a0,a2,a4,a6,a8,M0,M2,M4,M6,M8,x0,y0,l;let L_num;let L_center;if(typeof lonCenter==='undefined'){L_num=Math.floor(L*180/pi/3.0+0.5);L_center=3*L_num}else{L_center=lonCenter}l=(L/pi*180-L_center)*3600;M0=a*(1-e);M2=3.0/2.0*e*M0;M4=5.0/4.0*e*M2;M6=7.0/6.0*e*M4;M8=9.0/8.0*e*M6;a0=M0+M2/2.0+3.0/8.0*M4+5.0/16.0*M6+35.0/128.0*M8;a2=M2/2.0+M4/2+15.0/32.0*M6+7.0/16.0*M8;a4=M4/8.0+3.0/16.0*M6+7.0/32.0*M8;a6=M6/32.0+M8/16.0;a8=M8/128.0;Xz=a0*B-a2/2.0*sin(2*B)+a4/4.0*sin(4*B)-a6/6.0*sin(6*B)+a8/8.0*sin(8*B);c=a*a/b;V=sqrt(1+e1*cos(B)*cos(B));N=c/V;t=tan(B);n=e1*cos(B)*cos(B);m1=N*cos(B);m2=N/2.0*sin(B)*cos(B);m3=N/6.0*pow(cos(B),3)*(1-t*t+n);m4=N/24.0*sin(B)*pow(cos(B),3)*(5-t*t+9*n);m5=N/120.0*pow(cos(B),5)*(5-18*t*t+pow(t,4)+14*n-58*n*t*t);m6=N/720.0*sin(B)*pow(cos(B),5)*(61-58*t*t+pow(t,4));x0=Xz+m2*l*l/pow(p0,2)+m4*pow(l,4)/pow(p0,4)+m6*pow(l,6)/pow(p0,6);y0=m1*l/p0+m3*pow(l,3)/pow(p0,3)+m5*pow(l,5)/pow(p0,5);let x=x0;let y=y0+500000;return{east:y,north:x,x:x,y:y}},unproj:function(x,y,l0){const pi=3.141592653589793238463;const p0=206264.8062470963551564;let e=0.00669438002290;let e1=0.00673949677548;let b=6356752.3141;let a=6378137.0;let cos=Math.cos;let sin=Math.sin;let tan=Math.tan;let pow=Math.pow;let sqrt=Math.sqrt;let Bf,B0,FBf,M,N,V,t,n,c,y1,n1,n2,n3,n4,n5,n6,a0,a2,a4,a6,M0,M2,M4,M6,M8,l;let L_num,L_center;L_num=x;y1=y-500000;M0=a*(1-e);M2=3.0/2.0*e*M0;M4=5.0/4.0*e*M2;M6=7.0/6.0*e*M4;M8=9.0/8.0*e*M6;a0=M0+M2/2.0+3.0/8.0*M4+5.0/16.0*M6+35.0/128.0*M8;a2=M2/2.0+M4/2+15.0/32.0*M6+7.0/16.0*M8;a4=M4/8.0+3.0/16.0*M6+7.0/32.0*M8;a6=M6/32.0+M8/16.0;Bf=x/a0;B0=Bf;while((Math.abs(Bf-B0)>0.0000001)||(B0==Bf)){B0=Bf;FBf=-a2/2.0*sin(2*B0)+a4/4.0*sin(4*B0)-a6/6.0*sin(6*B0);Bf=(x-FBf)/a0}t=tan(Bf);c=a*a/b;V=sqrt(1+e1*cos(Bf)*cos(Bf));N=c/V;M=c/pow(V,3);n=e1*cos(Bf)*cos(Bf);n1=1/(N*cos(Bf));n2=-t/(2.0*M*N);n3=-(1+2*t*t+n)/(6.0*pow(N,3)*cos(Bf));n4=t*(5+3*t*t+n-9*n*t*t)/(24.0*M*pow(N,3));n5=(5+28*t*t+24*pow(t,4)+6*n+8*n*t*t)/(120.0*pow(N,5)*cos(Bf));n6=-t*(61+90*t*t+45*pow(t,4))/(720.0*M*pow(N,5));let B=(Bf+n2*y1*y1+n4*pow(y1,4)+n6*pow(y1,6))/pi*180;let L0=l0;l=n1*y1+n3*pow(y1,3)+n5*pow(y1,5);let L=L0+l/pi*180;return{lat:B,lon:L,B:B,L:L}}},jd:{cs:{dx:0,dy:0,rota:0,scale:1},cs1:{dx:0,dy:0,rota:0,scale:1},gps2k(shuju,lon,lat){let xy;if(shuju.proj=="gaosi"){xy=LL.gaosi.proj(lon,lat,shuju.center)}else{xy=LL.utm.proj(lon,lat,shuju.center)}let{x,y}=xy;let x1=this.cs.dx+this.cs.scale*(x*Math.cos(this.cs.rota)-y*Math.sin(this.cs.rota));let y1=this.cs.dy+this.cs.scale*(x*Math.sin(this.cs.rota)+y*Math.cos(this.cs.rota));return{x1,y1}},xy2gps(shuju,x,y){let x1=this.cs1.dx+this.cs1.scale*(x*Math.cos(this.cs1.rota)-y*Math.sin(this.cs1.rota));let y1=this.cs1.dy+this.cs1.scale*(x*Math.sin(this.cs1.rota)+y*Math.cos(this.cs1.rota));let LB;if(shuju.proj=="gaosi"){LB=LL.gaosi.unproj(x1,y1,shuju.center)}else{LB=LL.utm.unproj(x1,y1,shuju.center,shuju.south)}return LB},transelate(shuju){let p1=[];let p2=[];for(let item of shuju.data){p1.push(item.x,item.y);let xy;if(shuju.proj=="gaosi"){xy=LL.gaosi.proj(item.L,item.B,shuju.center)}else{xy=LL.utm.proj(item.L,item.B,shuju.center)}p2.push(xy.x,xy.y)}this.cs=LL.cs4(p2,p1);this.cs1=LL.cs4(p1,p2);return{p1:p1.flat(),p2:p2.flat(),cs:this.cs,cs1:this.cs1}},lnglatDistance(lon1,lat1,lon2,lat2){const toRadians=(degrees)=>{return degrees*(Math.PI/180)};const R=6371;const dLat=toRadians(lat2-lat1);const dLon=toRadians(lon2-lon1);const radLat1=toRadians(lat1);const radLat2=toRadians(lat2);const a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.sin(dLon/2)*Math.sin(dLon/2)*Math.cos(radLat1)*Math.cos(radLat2);const c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));const distance=R*c;return distance},hh(kk,data,dl,sqxba){for(let i=1;i<data.length-1;i++){let[qk,qh]=data[i-1];let[k,h,r]=data[i];let[nk,nh]=data[i+1];let deltk=0;let xg=false;for(let d1 of dl){if(k>=Math.max(...d1)&&Math.min(...d1)>=qk){k+=d1[0]-d1[1];xg=true}}let p1=(h-qh)/(k-qk+deltk);let p2=(nh-h)/(nk-k+deltk);let deltx=p2-p1>0?1:-1;let t=Math.abs(r*(p2-p1))/2;if(kk<=k+t){if(xg==true&&sqxba!=true){for(let d1 of dl){if(kk>=d1[0]){kk+=d1[0]-d1[1]}}}if(kk<=k-t){let h0=h+(kk-k)*p1;return h0}else{let k0=kk-k+t;let h0=h-t*p1+k0*k0/2/r+k0*p1;return h0}}}return 0},decimalToDMS(decimalDegree){decimalDegree=decimalDegree*180/3.1415926;let degrees=Math.floor(decimalDegree);let minutesDecimal=(decimalDegree-degrees)*60;let minutes=Math.floor(minutesDecimal);let seconds=(minutesDecimal-minutes)*60;return(degrees+minutes/100+seconds/10000).toFixed(6)},calculateAzimuth(point1,point2){let dx=point2.X-point1.X;let dy=point2.Y-point1.Y;let azimuth=Math.atan2(dy,dx);if(azimuth<0){azimuth+=2*Math.PI}return azimuth},calculateCurveElements(Ls1,Ls2,R,alpha){let T1=0;let T2=0;let E,L,J;let m1=Ls1/2-Math.pow(Ls1,3)/(240*Math.pow(R,2))-Math.pow(Ls1,5)/(34560*Math.pow(R,4));let m2=Ls2/2-Math.pow(Ls2,3)/(240*Math.pow(R,2))-Math.pow(Ls2,5)/(34560*Math.pow(R,4));let p1=Math.pow(Ls1,2)/(24*R)-Math.pow(Ls1,4)/(2688*R*R*R);let p2=Math.pow(Ls2,2)/(24*R)-Math.pow(Ls2,4)/(2688*R*R*R);T1=m1+(R+p2-(R+p1)*Math.cos(alpha))/Math.sin(alpha);T2=m2+(R+p1-(R+p2)*Math.cos(alpha))/Math.sin(alpha);E=(R+(p1+p2)/2)/Math.cos(alpha/2)-R;let beta01=Ls1/(2*R);let beta02=Ls2/(2*R);Ly=R*(alpha-beta01-beta02);L=Ls1+Ls2+Ly;J=T1+T2-L;return{T1,T2,Ly,L,Ly,p1,p2,beta01,beta02}},calculateDistance(x1,y1,x2,y2){const dx=Math.pow(x2-x1,2);const dy=Math.pow(y2-y1,2);return Math.sqrt(dx+dy)},calculateTriangleArea(point1,point2,point3){const x1=point1.X;const y1=point1.Y;const x2=point2.X;const y2=point2.Y;const x3=point3.X;const y3=point3.Y;const area=0.5*(x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2));return area},calculateMainPointMileages(data){let listXY=[];let listXY1=[];let lr18=data.jd;let sk=lr18[0][2];let JD2Mileage=0;let hzx,hzy;for(let i=1;i<lr18.length-1;i++){let JD1={X:lr18[i-1][0],Y:lr18[i-1][1]};if(i>1){JD1={X:hzx,Y:hzy}}let JD2={X:lr18[i][0],Y:lr18[i][1]};let JD3={X:lr18[i+1][0],Y:lr18[i+1][1]};let R=lr18[i][4];let Ls1=lr18[i][2];let Ls2=lr18[i][3];let xyzy=1;let azimuth12=this.calculateAzimuth(JD1,JD2);if(i==3&&data.name=="jd法"){}let azimuth23=this.calculateAzimuth(JD2,JD3);let alpha=azimuth23-azimuth12;if(alpha<0){alpha=-alpha}if(alpha>Math.PI){alpha=Math.PI*2-alpha}let area=this.calculateTriangleArea(JD1,JD2,JD3);if(area<0)xyzy=-1;let{T1,T2,Ly,L,p1,p2,beta01,beta02}=this.calculateCurveElements(Ls1,Ls2,R,alpha);if(i==3&&data.name=="jd法"){alert(beta01)}let ZH,HY,QZ,YH,HZ;let zhx,zhy;let dist1=this.calculateDistance(JD1.X,JD1.Y,JD2.X,JD2.Y);JD2Mileage=sk+dist1;ZH=JD2Mileage-T1;HY=ZH+Ls1;QZ=ZH+Ls1+(L-Ls2-Ls1)/2;YH=ZH+L-Ls2;HZ=ZH+L;let listXYitem={index:i,JDK:JD2Mileage,ZH,HY,QZ,YH,HZ,T1,T2,Ly,L,Ly,R,Ls1,Ls2,alpha:this.decimalToDMS(alpha)*1,azimuth12:this.decimalToDMS(azimuth12)*1,azimuth23:this.decimalToDMS(azimuth23)*1,};if(dist1>T1&&dist1-T1>0.01){xycd=dist1-T1;listXY1.push(["jd"+i+"前直线",Math.round(sk*1000)/1000,Math.round(JD1.X*1000)/1000,Math.round(JD1.Y*1000)/1000,azimuth12,xycd,0,0,0])}zhx=JD2.X-T1*Math.cos(azimuth12);zhy=JD2.Y-T1*Math.sin(azimuth12);let zhk=sk+dist1-T1;if(Ls1!=0){listXYitem.zhxy=`x:${Math.round(zhx*1000)/1000}y:${Math.round(zhy*1000)/1000}`;listXY1.push(["jd"+i+"一缓",Math.round(zhk*1000)/1000,Math.round(zhx*1000)/1000,Math.round(zhy*1000)/1000,azimuth12,Ls1,0,R,xyzy])}let xy={x:0,y:0,"fwj":0,rad:0};if(Ly!=0&&Ls1!=0){xy=LL.zs(ZH,zhx,zhy,azimuth12,Ls1,0,R,xyzy,ZH+Ls1,0,90);listXY1.push(["jd"+i+"圆弧",Math.round(HY*1000)/1000,Math.round(xy.x*1000)/1000,Math.round(xy.y*1000)/1000,xy.rad,Ly,R,R,xyzy])}else{xy={x:zhx,y:zhy,"fwj":0,rad:azimuth12};listXY1.push(["圆弧jd"+i,Math.round(HY*1000)/1000,Math.round(zhx*1000)/1000,Math.round(zhy*1000)/1000,azimuth12,Ly,R,R,xyzy])}if(Ls2!=0){xy=LL.zs(HY,xy.x,xy.y,xy.rad,Ly,R,R,xyzy,HY+Ly,0,90);listXY1.push(["jd"+i+"二缓",Math.round(YH*1000)/1000,Math.round(xy.x*1000)/1000,Math.round(xy.y*1000)/1000,xy.rad,Ls2,R,0,xyzy])}hzx=JD2.X+T2*Math.cos(azimuth23);hzy=JD2.Y+T2*Math.sin(azimuth23);sk=zhk+L;listXY.push(listXYitem);if(i==lr18.length-2){let dist2=this.calculateDistance(JD2.X,JD2.Y,JD3.X,JD3.Y);if(dist2-T2>0.01){listXY1.push(["jd"+i+"终点的直线",Math.round(sk*1000)/1000,Math.round(hzx*1000)/1000,Math.round(hzy*1000)/1000,azimuth23,dist2-T2,0,0,0])}}}return{listXY,listXY1}},}};
+           
+    </script>
+</head>
+
+<body>
+    <!-- 第一行：项目、路线、断链、显示主点（强制同行，不换行） -->
+    <div style="display:flex; flex-wrap:nowrap; align-items:center; gap:4px 6px; overflow-x:auto; margin-bottom:6px; padding-bottom:4px;">
+        <label style="font-size:12px; flex-shrink:0;">项目</label>
+        <select id="proj" style="height:28px; min-width:70px; font-size:12px; padding:0 16px 0 4px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; flex-shrink:0;">
+            <option value="red">请选择项目</option>
+        </select>
+        <label style="font-size:12px; flex-shrink:0;">路线</label>
+        <select id="mySelect" style="height:28px; min-width:70px; font-size:12px; padding:0 16px 0 4px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; flex-shrink:0;">
+            <option value="red">请选择路线</option>
+        </select>
+        <label id="DL" style="font-size:12px; flex-shrink:0; display:none; white-space:nowrap;">
+            断链之后? <input type="checkbox" id="BA" style="width:14px; height:14px; margin:0; vertical-align:middle;">
+        </label>
+        <label style="font-size:12px; flex-shrink:0; white-space:nowrap;">
+            显示主点 <input type="checkbox" id="mp" style="width:14px; height:14px; margin:0; vertical-align:middle;">
+        </label>
+    </div>
+
+    <hr>
+
+    <!-- 第二行：里程 + 宽度 + 右角（强制同行，不换行） -->
+    <!-- 第二行：里程 + 宽度 + 右角，里程宽度为其他两倍（130px vs 65px） -->
+    <div style="display:flex; flex-wrap:nowrap; align-items:center; gap:4px 6px; overflow-x:auto; margin-bottom:6px; padding-bottom:4px;">
+        <div style="display:flex; align-items:center; gap:2px; flex-shrink:0;">
+            <label style="font-size:12px;">里程</label>
+            <input type="number" id="k" style="height:30px; width:130px; border:none; border-bottom:2px solid #94a3b8; padding:0 2px; font-size:13px;" onfocus="this.select();" onmouseup="this.select();" oncontextmenu="return false" enterkeyhint="hi">
+        </div>
+        <div style="display:flex; align-items:center; gap:2px; flex-shrink:0;">
+            <label style="font-size:12px;">宽度</label>
+            <input type="number" id="b" value="0" style="height:30px; width:65px; border:none; border-bottom:2px solid #94a3b8; padding:0 2px; font-size:13px;" placeholder="左负右正" onfocus="this.select();" onmouseup="this.select();" oncontextmenu="return false">
+        </div>
+        <div style="display:flex; align-items:center; gap:2px; flex-shrink:0;">
+            <label style="font-size:12px;">右角</label>
+            <input type="number" id="z" value="90" style="height:30px; width:65px; border:none; border-bottom:2px solid #94a3b8; padding:0 2px; font-size:13px;" placeholder="十进制" onfocus="this.select();" onmouseup="this.select();" oncontextmenu="return false">
+        </div>
+    </div>
+
+
+    <br><br>
+
+    <div style="display:flex; flex-wrap:nowrap; align-items:center; gap:6mm; overflow-x:auto; margin-bottom:6px; padding-bottom:4px;">
+        <button class="simple-button" onclick="getValue()" style="flex:0 0 auto; padding:0 6px; height:30px; font-size:12px; background:#3b82f6; color:#fff; border:none; border-radius:4px; cursor:pointer; white-space:nowrap;">K=&gt;xy</button>
+        <button class="simple-button" onclick="fsk()" style="flex:0 0 auto; padding:0 6px; height:30px; font-size:12px; background:#3b82f6; color:#fff; border:none; border-radius:4px; cursor:pointer; white-space:nowrap;">xy=&gt;K</button>
+        <button class="simple-button" id="toggleButton" style="flex:0 0 auto; padding:0 6px; height:30px; font-size:12px; background:#8b5cf6; color:#fff; border:none; border-radius:4px; cursor:pointer; white-space:nowrap; display:none;">gps=&gt;K</button>
+    </div>
+    <!-- 结果显示区域（完全保留原有结构和样式） -->
+    <p id="xy" style="margin:4px 0;"></p>
+    <hr>
+    <div>
+        <label>X</label>
+        <input type="number" id="fsx" style="height:34px; width:100px; border:none; border-bottom:2px solid #94a3b8; padding:0 4px;" placeholder="北方向" onfocus="this.select();" onmouseup="this.select();" oncontextmenu="return false">
+        <div style="margin-top:4px;">
+            <label>Y</label>
+            <input type="number" id="fsy" style="height:34px; width:100px; border:none; border-bottom:2px solid #94a3b8; padding:0 4px;" placeholder="东方向" onfocus="this.select();" onmouseup="this.select();" oncontextmenu="return false">
+        </div>
+    </div>
+    <p id="fsk"></p>
+    <div id="locationInfo"></div>
+    <hr>
+    <div id="result" style="width:100%; overflow-x:auto; display:none;"></div>
+
+    <!-- 所有 JavaScript 原封不动（略） -->
+    <script>
+        // ========== 全局变量 ==========
+        // 当前路线的主点数据（用于显示表格）
+        let listXY1 = [],
+          allproj = [],          // 存储所有加载的项目数据
+          listXY = [],           // 用于其他用途（暂未使用）
+          DL = [],               // 当前路线的断链数据
+          lot1 = {},             // 当前选中的项目对象
+          preRoadName="",        // 当前选中的路线名称
+          sqx = [];              // 当前路线的竖曲线数据
+        
+        // ========== 添加项目 ==========
+        // 将项目数据添加到下拉菜单中，并存储到 allproj
+        function addproj(name, data) {
+          let selectElement = document.getElementById('proj');
+          let option = document.createElement('option');
+          option.textContent = name;
+          option.value = name;
+          if (typeof data == "string") {
+            allproj.push(JSON.parse(data))
+          } else {
+            allproj.push(data)
+          }
+          selectElement.appendChild(option);
+          // 自动选中第一个项目并触发 change 事件
+          if (selectElement.options.length > 0) {
+            selectElement.selectedIndex = 1;
+            selectElement.dispatchEvent(new Event('change'))
+          }
+        }
+        
+        // ========== 项目切换事件 ==========
+        document.getElementById('proj').addEventListener('change', function() {
+          if (this.selectedIndex == 0) {
+            listXY1 = [];
+            document.getElementById('xy').innerHTML = "";
+            return
+          }
+          // 获取选中的项目数据
+          lot1 = allproj[this.selectedIndex - 1];
+          if("proj" in allproj[this.selectedIndex - 1]){
+             let {dx,dy,scale,rota}=  LL.jd.transelate(lot1).cs;
+          }
+          // 加载该项目的路线列表
+          addRoads(allproj[this.selectedIndex - 1]);
+          // 根据是否有投影参数控制 GPS 按钮的显示
+          if("proj" in allproj[this.selectedIndex - 1]){
+              document.getElementById('toggleButton').style.display = "inline";
+          }else{           
+              document.getElementById('toggleButton').style.display="none";
+              // 如果正在监听 GPS，则停止
+              if(isWatching){
+                  document.getElementById('toggleButton').dispatchEvent(new Event('click'))
+                  document.getElementById('fsk').innerHTML = "";
+                  document.getElementById('locationInfo').innerHTML = "";
+              }
+          }
+        });
+        
+        // ========== 加载路线列表 ==========
+        function addRoads(lot2) {
+          if (typeof lot2 == "string") {
+            lot2 = JSON.parse(lot2)
+          }
+          let selectElement = document.getElementById('mySelect');
+          selectElement.innerHTML = "";
+          let option = document.createElement('option');
+          option.textContent = "请选项路线";
+          option.value = "none";
+          selectElement.appendChild(option);
+          selectElement.selectedIndex = 0;
+          let optionsData = lot2.roads;
+          for (let optionText of optionsData) {
+            option = document.createElement('option');
+            option.textContent = optionText.name;
+            option.value = optionText.name;
+            selectElement.appendChild(option)
+          }
+          // 自动选中第一条路线
+          if (selectElement.options.length > 0) {
+            selectElement.selectedIndex = 1;
+            selectElement.dispatchEvent(new Event('change'))
+          }
+        }
+        
+        // ========== 路线切换事件 ==========
+        document.getElementById('mySelect').addEventListener('change', function() {
+          listXY1 = [];
+          listXY = [];
+          let resultDiv = document.getElementById('result');
+          resultDiv.innerHTML = "";
+          if (this.selectedIndex == 0) {
+            preRoadName="请选择路线";
+            return;
+          }
+          let road = lot1.roads[this.selectedIndex - 1];
+          preRoadName=this.value;
+          // 如果路线数据包含交点（jd），则计算主点里程并生成平曲线要素
+          if ("jd" in road) {
+            let jd2xy = LL.jd.calculateMainPointMileages(road);
+            for (let item of jd2xy.listXY1) {
+              item[4] = Number(LL.jd.decimalToDMS(item[4]));
+              item[5] = Math.round(item[5] * 10000) / 10000;
+              listXY1.push(item.slice(1, item.length))
+            }
+            listXY = jd2xy.listXY
+          } else {
+            listXY = [];
+            listXY1 = road.pqx       // 直接使用已有的平曲线数据
+          }
+          // 竖曲线数据
+          if ("sqx" in road) {
+            sqx = road.sqx
+          } else {
+            sqx = []
+          }
+          // 断链数据
+          if ("DL" in road) {
+            DL = road.DL;
+            resultDiv.innerHTML += `<h2>断链</h2>`;
+            for (let item of DL) {
+              resultDiv.innerHTML += `${item[0]}--${item[1]}<br>`
+            }
+            document.getElementById('DL').style.display = ''
+          } else {
+            DL = [];
+            document.getElementById('DL').style.display = 'none'
+          }
+        
+          // ========== 生成主点表格 ==========
+          const table = document.createElement('table');
+          const thead = document.createElement('thead');
+          const tbody = document.createElement('tbody');
+          // 表头
+          const headerRow = document.createElement('tr');
+          ["序号","起点桩号","x","y","方位角","长度","起点半径","终点半径","转向"].forEach(headerText => {
+              const th = document.createElement('th');
+              th.textContent = headerText;
+              headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          // 数据行
+          let lie=1;
+          for (let item of listXY1) {
+             const row = document.createElement('tr');
+             const tdL = document.createElement('td');
+             tdL.textContent =lie;
+             row.appendChild(tdL);
+             lie=lie+1;
+             item.forEach((key,index)=> {
+                const td = document.createElement('td');
+                if(index==7){  // 转向
+                   if(key==0)key="直线";
+                   if(key==1)key="右转";
+                   if(key==-1)key="左转";
+                   td.textContent =key;
+                }else if(index==3){ // 方位角（度分秒转度）
+                   key=LL.dmsToRadians(key);
+                   td.textContent =LL.radiansToDMS(key);
+                }else if(index==0){ // 桩号格式化
+                   td.textContent =LL.num2k(key);
+                }else{
+                   td.textContent =key;
+                }
+                row.appendChild(td);
+             });
+             tbody.appendChild(row);
+          }
+          table.appendChild(tbody);
+          resultDiv.appendChild(table);
+          // 设置里程输入框的提示范围
+          document.getElementById('k').placeholder = listXY1[0][0] + "--" + Math.round((listXY1[listXY1.length - 1][0] + listXY1[listXY1.length - 1][4]) * 100) / 100
+        });
+        
+        // ========== K -> XY 计算 ==========
+        function getValue() {
+          document.getElementById('xy').innerHTML = "";
+          if (listXY1.length < 1) {
+            alert("road is none");
+            return
+          }
+          document.getElementById('xy').innerHTML = "计算范围" + listXY1[0][0] + "--" + (listXY1[listXY1.length - 1][0] + listXY1[listXY1.length - 1][4]) + "<br>";
+          var kValue = document.getElementById('k').value * 1;
+          let deltk = 0;
+          let sqxba = false;
+          // 断链处理：如果勾选了“断链之后”，且里程在断链区间内，则累加断链长度
+          if (document.getElementById('BA').checked) {
+            for (let d1 of DL) {
+              if (kValue >= d1[1] && kValue <= d1[0]) {
+                deltk += d1[0] - d1[1];
+                sqxba = true
+              }
+            }
+          }
+          // 计算中桩高程（竖曲线）
+          let hcenter = LL.jd.hh(kValue + deltk, sqx, DL, sqxba);
+          // 再次处理断链，用于显示警告和累加
+          deltk = 0;
+          for (let d1 of DL) {
+            if (kValue > d1[0] && kValue < d1[1]) {
+              document.getElementById('xy').innerHTML += `${d1[0]}--${d1[1]}位于短链处<br>`
+            }
+            if (kValue > d1[0]) {
+              deltk += d1[0] - d1[1]
+            }
+          }
+          if (document.getElementById('BA').checked) {
+            for (let d1 of DL) {
+              if (kValue >= d1[1] && kValue <= d1[0]) {
+                deltk += d1[0] - d1[1]
+              }
+            }
+          }
+          kValue += deltk;
+          
+          var zValue = document.getElementById('z').value * 1;   // 右角（偏转角度）
+          var bValue = document.getElementById('b').value * 1;   // 宽度偏移（左负右正）
+          // 遍历平曲线元素，找到里程所在的元素并计算坐标
+          for (let row = 0; row < listXY1.length; row++) {
+            let xyk = listXY1[row][0];
+            let xyx = listXY1[row][1];
+            let xyy = listXY1[row][2];
+            let dtfwj = listXY1[row][3];
+            let d = parseInt(dtfwj);
+            let fen = Math.floor(dtfwj * 100) - d * 100;
+            let miao = dtfwj * 100 % 1;
+            let xyhd = (d + fen / 60 + miao * 100 / 3600) * Math.PI / 180;
+            let xycd = listXY1[row][4];
+            let xyqdr = listXY1[row][5];
+            let xyzdr = listXY1[row][6];
+            let xyzy = listXY1[row][7];
+            if (kValue >= xyk && kValue <= (xyk + xycd)) {
+              // 调用正算函数 LL.zs
+              let xy = LL.zs(xyk, xyx, xyy, xyhd, xycd, xyqdr, xyzdr, xyzy, kValue, bValue, zValue);
+              document.getElementById('xy').innerHTML += `实际k的值为:${kValue}<br><br>路线:${preRoadName}<br>X=:${xy.x.toFixed(3)}<br><br>Y=:${xy.y.toFixed(3)}<br><br>切线方位角=:${LL.radiansToDMS(xy.rad)}<br>中桩高:${hcenter.toFixed(3)}`;
+              document.getElementById('fsx').value = xy.x;
+              document.getElementById('fsy').value = xy.y;
+              navigator.vibrate([10]);  // 震动反馈（移动端）
+              break;
+            }
+          }
+        }
+        
+        // ========== XY -> K 反算 ==========
+        function fsk() {
+          document.getElementById('fsk').innerHTML = "";
+          if (listXY1.length < 1) {
+            alert("road is none");
+            return
+          }
+          let fsx = document.getElementById('fsx').value * 1;
+          let fsy = document.getElementById('fsy').value * 1;
+          let xy2k = LL.fs(listXY1, fsx, fsy);   // 反算函数
+          // 断链处理（根据设计里程修正）
+          let deltk = 0;
+          for (let d1 of DL) {
+            if (xy2k.k > d1[0]) {
+              deltk = d1[0] - d1[1];
+              xy2k.k -= deltk
+            }
+          }
+          let ba = false;
+          if (deltk != 0) {
+            for (let d1 of DL) {
+              if (xy2k.k <= d1[0] && xy2k.k >= d1[1]) {
+                ba = true
+              }
+            }
+          }
+          document.getElementById('fsk').innerHTML = `🏠🏠🏠🏠🏠----🏠🏠🏠🏠🏠：<br><br>AT: 👉 ${LL.num2k(xy2k.k)}📍${ba==true?"断链之后":""}<br><br>距中:📈 ${Math.round(xy2k.b*1000)/1000}<br>`
+          navigator.vibrate([20]);
+          return xy2k
+        }
+        
+        // ========== 显示主点表格开关 ==========
+        document.getElementById('mp').addEventListener('change', function() {
+          if (this.checked) {
+            document.getElementById('result').style.display = ""
+          } else {
+            document.getElementById('result').style.display = "none"
+          }
+        });
+        
+        // ========== GPS 定位监听 ==========
+        let toggleButton = document.getElementById('toggleButton');
+        let locationInfo = document.getElementById('locationInfo');
+        let watchId;
+        let lastUpdateTime = 0;
+        let isWatching = false;
+        if (!('geolocation' in navigator)) {
+          locationInfo.textContent = '您的浏览器不支持地理定位功能。';
+          toggleButton.disabled = true
+        }
+        toggleButton.addEventListener('click', function() {
+          if (isWatching) {
+            // 停止监听
+            navigator.geolocation.clearWatch(watchId);
+            toggleButton.textContent = 'gps=>K';
+            isWatching = false
+          } else {
+            // 开始监听
+            watchId = navigator.geolocation.watchPosition(function(position) {
+              let currentTime = Date.now();
+              if (currentTime - lastUpdateTime >= 2000) {  // 每2秒更新一次
+                let latitude = position.coords.latitude;
+                let longitude = position.coords.longitude;
+                let accuracy = position.coords.accuracy;
+                // GPS坐标转平面坐标（投影）
+                let g = LL.jd.gps2k(lot1, longitude, latitude);
+                document.getElementById('fsx').value = `${g.x1.toFixed(3)}`;
+        
+                document.getElementById('fsy').value = `${g.y1.toFixed(3)}`;
+        
+                // 自动反算里程
+                let kinfo = fsk();
+                // 如果超出路线范围，计算偏离距离
+                if (!Number.isFinite(kinfo.b)) {
+                  let lb = LL.jd.xy2gps(lot1, kinfo.x, kinfo.y);
+                  let dist = LL.jd.lnglatDistance(longitude, latitude, lb.L, lb.B);
+                  document.getElementById('fsk').innerHTML = `🚫🚫🚫🚫🚫<${preRoadName}> 范围:<br>当前${kinfo.b}≈${dist.toFixed(1)}km`
+                }
+                locationInfo.innerHTML = `🧭🧭🧭🧭--------🧭🧭🧭🧭<br>纬度:${latitude}<br>经度:${longitude}<br>精度:${accuracy.toFixed(1)}m`;
+                lastUpdateTime = currentTime
+              }
+            }, function(error) {
+          switch (error.code) {
+            case 1: // PERMISSION_DENIED
+              // 💡 网页端核心：把“权限”和“系统GPS”一起提示
+              locationInfo.textContent = '定位失败：请确保已允许网站获取位置，且手机系统定位(GPS)已打开。';
+              break;
+              
+            case 2: // POSITION_UNAVAILABLE
+              // 💡 针对部分安卓网页没开GPS会走 case 2 的情况
+              locationInfo.textContent = '无法获取位置：请检查手机GPS开关是否开启，或移步到信号较好的地方。';
+              break;
+              
+            case 3: // TIMEOUT
+              locationInfo.textContent = '定位超时：网络信号较弱，请刷新页面重试。';
+              break;
+              
+            default:
+              locationInfo.textContent = '定位失败：发生未知错误。';
+              break;
+          }
+        
+        
+        
+              navigator.geolocation.clearWatch(watchId);
+              toggleButton.textContent = 'gps2K';
+              isWatching = false
+            }, {
+              enableHighAccuracy: true,
+              timeout: Number.POSITIVE_INFINITY,
+              //maximumAge: Infinity
+            });
+            toggleButton.textContent = 'stop';
+            isWatching = true
+          }
+        });
+                                                                           
+    </script>
+    </div>
+    <script src="./data.js"></script>
+    <script>
+        for (let i = 0; i < data.length; i++) {
+            addproj(data[i].tile, data[i]);
+        }
+        
+        // 自动定位
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                var toggleBtn = document.getElementById('toggleButton');
+                if (toggleBtn && toggleBtn.style.display !== 'none') {
+                    toggleBtn.click();
+                }
+            }, 500);
+        });
+    </script>
+
+</body>
+
+</html>
