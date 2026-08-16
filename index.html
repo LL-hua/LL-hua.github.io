@@ -343,7 +343,7 @@
               }
             }
           }
-          document.getElementById('fsk').innerHTML = `🏠🏠🏠🏠🏠----🏠🏠🏠🏠🏠：<br><br>AT: 👉 ${LL.num2k(xy2k.k)}📍${ba==true?"断链之后":""}<br><br>距中:📈 ${Math.round(xy2k.b*1000)/1000}<br>`
+          document.getElementById('fsk').innerHTML = `<br>AT: 👉 ${LL.num2k(xy2k.k)}📍${ba==true?"断链之后":""} 距中:📈 ${Math.round(xy2k.b*1000)/1000}<br>`
           navigator.vibrate([20]);
           return xy2k
         }
@@ -395,7 +395,7 @@
                   let dist = LL.jd.lnglatDistance(longitude, latitude, lb.L, lb.B);
                   document.getElementById('fsk').innerHTML = `🚫🚫🚫🚫🚫<${preRoadName}> 范围:<br>当前${kinfo.b}≈${dist.toFixed(1)}km`
                 }
-                locationInfo.innerHTML = `🧭🧭🧭🧭--------🧭🧭🧭🧭<br>纬度:${latitude}<br>经度:${longitude}<br>精度:${accuracy.toFixed(1)}m`;
+                locationInfo.innerHTML = `🧭latlon: ${latitude},${longitude}<br>精度:${accuracy.toFixed(1)}m`;
                 lastUpdateTime = currentTime
               }
             }, function(error) {
