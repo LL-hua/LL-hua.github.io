@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel-DNA 纯记事本开发指南 (带参数提示功能)</title>
+    <style>
+        :root {
+            --primary: #107c41; /* Excel 经典绿 */
+            --bg: #f4f5f7;
+            --text: #333333;
+            --code-bg: #272822;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background-color: var(--bg);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        h1 {
+            color: var(--primary);
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 10px;
+            margin-top: 0;
+            font-size: 26px;
+        }
+        h2 {
+            color: #2b3e50;
+            font-size: 20px;
+            margin-top: 25px;
+            border-left: 4px solid var(--primary);
+            padding-left: 10px;
+        }
+        p { margin: 10px 0; }
+        ol, ul { padding-left: 20px; }
+        li { margin-bottom: 8px; }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: Consolas, Monaco, monospace;
+            font-size: 14px;
+        }
+        pre {
+            background-color: var(--code-bg);
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            color: inherit;
+        }
+        .tip {
+            background-color: #e6f4ea;
+            border-left: 4px solid #34a853;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        .badge {
+            background-color: var(--primary);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Excel-DNA 纯记事本开发极速指南 <span class="badge">带参数提示功能</span></h1>
+    <p>不用安装 Visual Studio，配合 Windows 记事本和命令行工具，开发具有和 Excel 内置公式一样完美参数悬浮提示的插件。</p>
+
+    <h2>1. 环境准备 (只需一次)</h2>
+    <ol>
+        <li>下载并安装官方 <strong><a href="https://dotnet.microsoft.com/" target="_blank">.NET SDK</a></strong> (推荐 .NET 8.0 或更高版本)。</li>
+        <li>打开 Windows 命令提示符 (CMD)，运行以下命令安装 Excel-DNA 官方模板：
+            <pre><code>dotnet new install ExcelDna.Templates</code></pre>
+        </li>
+    </ol>
+
+    <h2>2. 一键创建项目并添加参数提示包</h2>
+    <p>在 CMD 中切换到您的工作目录（例如 <code>D:\Projects</code>），然后依次运行以下命令：</p>
+    <pre><code>:: 1. 创建项目
+dotnet new excel-dna -n MyAddIn
+
+:: 2. 进入项目目录
+cd MyAddIn
+
+:: 3. 核心步骤：一键引入公式参数提示支持包
+dotnet add package ExcelDna.IntelliSense</code></pre>
+
+    <h2>3. 记事本修改代码</h2>
+    <ol>
+        <li>在 <code>MyAddIn</code> 文件夹内，找到 <strong><code>AddIn.cs</code></strong> 文件，鼠标右键 -> <strong>打开方式</strong> -> 选择 <strong>记事本</strong>。</li>
+        <li>清空内容或直接修改，确保代码包含 <code>IExcelAddIn</code> 接口用以激活提示，并使用 <code>[ExcelArgument]</code> 来描述参数。完整模板如下：
+<pre><code>using System;
+using ExcelDna.Integration;
+using ExcelDna.IntelliSense; // 引入提示命名空间
+
+// 1. 必须实现此接口，用于在 Excel 启动时自动开启提示服务
+public class MyAddInServer : IExcelAddIn
+{
+    public void AutoOpen()
+    {
+        IntelliSenseServer.Install(); // 激活参数提示服务
+    }
+
+    public void AutoClose()
+    {
+        IntelliSenseServer.Uninstall();
+    }
+}
+
+// 2. 编写你的自定义公式
+public static class MyFunctions
+{
+    [ExcelFunction(Description = "纯文本开发的简易加法，带参数提示")]
+    public static double MyAdd(
+        [ExcelArgument(Name = "数字A", Description = "需要相加 family 的第一个数字")] double a, 
+        [ExcelArgument(Name = "数字B", Description = "需要相加的第二个数字")] double b)
+    {
+        return a + b;
+    }
+}</code></pre>
+        </li>
+        <li>保存并关闭文件。</li>
+    </ol>
+
+    <h2>4. 命令行编译与测试</h2>
+    <ol>
+        <li>在 CMD 项目文件夹下执行编译：
+            <pre><code>dotnet build</code></pre>
+        </li>
+        <li>编译成功后，打开输出路径：<code>bin\Debug\net8.0-windows\</code></li>
+        <li><strong>测试运行：</strong> 
+            <ul>
+                <li>如果您的 Excel 是 64 位，双击运行 <code>MyAddIn-AddIn64.xll</code>。</li>
+                <li>如果您的 Excel 是 32 位，双击运行 <code>MyAddIn-AddIn.xll</code>。</li>
+            </ul>
+        </li>
+        <li>在 Excel 单元格中输入 <code>=MyAdd(</code>，此时就会完美弹出**参数名称和描述的悬浮提示框**！</li>
+    </ol>
+
+    <h2>5. 独立单文件打包发布</h2>
+    <p>当需要发给他人使用时，直接在 CMD 运行：</p>
+    <pre><code>dotnet publish -c Release</code></pre>
+    <p>去 <code>bin\Release\net8.0-windows\publish\</code> 目录下找到带有 <code>-packed.xll</code> 后缀的文件。这个单文件已经将**参数提示组件、业务代码以及依赖项全部压缩打包在了一起**，发给谁都能直接双击使用并带有完整的提示功能！</p>
+</div>
+
+</body>
+</html>
