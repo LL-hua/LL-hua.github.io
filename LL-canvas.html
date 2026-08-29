@@ -1,0 +1,1349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>道路桩号 · 纯平面坐标</title>
+    <style>
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+body { font-family: 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; overflow: hidden; height: 100vh; }
+#canvasWrapper { position: relative; width: 100vw; height: 100vh; background: #1a1a2e; touch-action: none; overflow: hidden; }
+#mainCanvas { display: block; width: 100%; height: 100%; background: #1a1a2e; touch-action: none; }
+
+/* 顶部信息栏 (absolute 不变) */
+#info-bar {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.75); backdrop-filter: blur(8px); color: #fff;
+    padding: 8px 16px; border-radius: 10px; z-index: 10; text-align: center;
+    font-size: 0.9rem; line-height: 1.4; pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.1); min-width: 180px;
+}
+#info-bar .road-name { font-weight: bold; color: #4fc3f7; }
+#info-bar .stake { font-size: 1.1rem; font-weight: 600; color: #fff; }
+#info-bar .offset { color: #aed581; }
+#info-bar .azimuth { color: #ffb74d; }
+#info-bar .status { color: #ef9a9a; }
+
+/* 左上角按钮组 (absolute 不变) */
+.top-left-buttons {
+    position: absolute; top: 12px; left: 12px; z-index: 10;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.top-left-buttons button {
+    background: rgba(255,255,255,0.9); border: none; border-radius: 8px;
+    padding: 6px 12px; font-size: 0.8rem; font-weight: 600; color: #1a3c5e;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; transition: 0.2s;
+    backdrop-filter: blur(4px); display: flex; align-items: center; gap: 4px;
+}
+.top-left-buttons button:hover { background: #fff; transform: scale(1.05); }
+.top-left-buttons button.active { background: #2b7be4; color: #fff; }
+
+/* 右上角道路选择 (absolute 不变) */
+#road-selector {
+    position: absolute; top: 12px; right: 12px; z-index: 10;
+    background: rgba(255,255,255,0.95); border: none; border-radius: 8px;
+    padding: 6px 12px; font-size: 0.9rem; font-weight: 600; color: #1a3c5e;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; outline: none;
+    max-width: 160px;
+}
+
+/* ★ 底部按钮改为 fixed 定位，保证始终可见 ★ */
+#locate-btn, #reset-all-btn {
+    position: fixed;
+    background: rgba(255,255,255,0.9);
+    border: none;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    font-size: 1.4rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    cursor: pointer;
+    z-index: 1000; /* 确保在最顶层 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.2s;
+    padding: 0;
+    line-height: 1;
+    backdrop-filter: blur(4px);
+}
+#locate-btn:hover, #reset-all-btn:hover { background: #fff; transform: scale(1.05); }
+#locate-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+#locate-btn { bottom: 24px; left: 16px; }
+#reset-all-btn { bottom: 24px; right: 16px; }
+
+/* 移动端适配 */
+@media (max-width: 600px) {
+    #info-bar { top: 8px; padding: 6px 12px; font-size: 0.75rem; min-width: 120px; }
+    #road-selector { top: 8px; right: 8px; padding: 4px 8px; font-size: 0.8rem; max-width: 120px; }
+    .top-left-buttons { top: 8px; left: 8px; }
+    .top-left-buttons button { padding: 4px 8px; font-size: 0.7rem; }
+    #locate-btn, #reset-all-btn { width: 38px; height: 38px; font-size: 1.2rem; }
+    #locate-btn { bottom: 16px; left: 12px; }
+    #reset-all-btn { bottom: 16px; right: 12px; }
+}
+    </style>
+</head>
+<body>
+<div id="canvasWrapper">
+    <canvas id="mainCanvas"></canvas>
+    <div class="top-left-buttons">
+        <button id="toggleStakesBtn" class="active">🔢 桩号</button>
+    </div>
+    <div id="info-bar"><div><span class="status">等待定位...</span></div></div>
+    <select id="road-selector"></select>
+    <button id="locate-btn" disabled>📍</button>
+    <button id="reset-all-btn">⟲</button>
+</div>
+
+<script>
+// ========================================================================
+// 1. 您的完整 LL 工具库（请在此粘贴）
+// ========================================================================
+const LL = {
+    // ---------- 基础工具 ----------
+    hua_getKBZ(x1, y1, x2, y2, points) {
+        if (!points) throw new Error('points is null');
+        const rows = points.length;
+        if (rows === 0 || points[0].length < 3) throw new Error('输入点集必须至少包含 X, Y, Z 三列');
+        const dx = x2 - x1, dy = y2 - y1;
+        const len2 = dx * dx + dy * dy;
+        if (len2 === 0) throw new Error('直线两点重合');
+        const len = Math.sqrt(len2);
+        const a = y1 - y2, b = x2 - x1, c = x1 * y2 - x2 * y1;
+        const result = new Array(rows);
+        for (let i = 0; i < rows; i++) {
+            const x0 = points[i][0], y0 = points[i][1], z = points[i][2];
+            const dot = (x0 - x1) * dx + (y0 - y1) * dy;
+            const signedDistToFoot = dot / len;
+            const signedVerticalDist = (a * x0 + b * y0 + c) / len;
+            result[i] = [signedDistToFoot, signedVerticalDist, z];
+        }
+        return result;
+    },
+    hua_Num2K(meters) {
+        const km = Math.floor(meters / 1000);
+        let m = Math.round((meters - km*1000) * 100) / 100;
+        if (Number.isInteger(m)) return `K${km}+${String(m).padStart(3,'0')}`;
+        else return `K${km}+${m.toFixed(2).padStart(6,'0')}`;
+    },
+    hua_DmsToRadians(dms) {
+        const deg = Math.floor(dms);
+        const frac = dms - deg;
+        const min = Math.floor(frac * 100);
+        const sec = (frac * 100 - min) * 100;
+        return (deg + min/60 + sec/3600) * Math.PI / 180;
+    },
+    hua_radiansToDMS_度分秒(rad) {
+        let deg = rad * 180 / Math.PI;
+        const d = Math.floor(deg);
+        let rem = (deg - d) * 60;
+        const m = Math.floor(rem);
+        const s = (rem - m) * 60;
+        return `${d}°${String(m).padStart(2,'0')}′${String(Math.round(s*10)/10).padStart(4,'0')}″`;
+    },
+    hua_Fwj(x0, y0, x1, y1) {
+        const x = x1 - x0, y = y1 - y0;
+        const cd = Math.sqrt(x * x + y * y);
+        let hd = Math.atan2(y, x);
+        if (hd < 0) hd += 2 * Math.PI;
+        return [cd, hd];
+    },
+    // ---------- 线路计算 ----------
+    hua_Zs(xyk, xyx, xyy, xyhd, xycd, xyqdr, xyzdr, xyzy, jsk, jsb, jd) {
+        jd = this.hua_DmsToRadians(jd);
+        if (Math.abs(xyqdr - xyzdr) < 0.01 && xyqdr > 0) {
+            const cx = xyx + xyqdr*Math.cos(xyhd + xyzy*Math.PI/2);
+            const cy = xyy + xyqdr*Math.sin(xyhd + xyzy*Math.PI/2);
+            const da = (jsk - xyk) / xyqdr * xyzy;
+            let az = xyhd + da;
+            if (az < 0) az += 2*Math.PI;
+            const ang = xyhd + xyzy*Math.PI/2 + da;
+            return [cx - xyqdr*Math.cos(ang) + jsb*Math.cos(ang - xyzy*Math.PI/2 + jd),
+                    cy - xyqdr*Math.sin(ang) + jsb*Math.sin(ang - xyzy*Math.PI/2 + jd), az];
+        }
+        if (xyqdr < 0.01 && xyzdr < 0.01 && xyzy < 0.01) {
+            return [xyx + (jsk-xyk)*Math.cos(xyhd) + jsb*Math.cos(xyhd+jd),
+                    xyy + (jsk-xyk)*Math.sin(xyhd) + jsb*Math.sin(xyhd+jd), xyhd];
+        }
+        let r1 = xyqdr<0.001?99999999:xyqdr, r2=xyzdr<0.001?99999999:xyzdr;
+        const f0=xyhd, q=xyzy, c=1/r1, d=(r1-r2)/(2*xycd*r1*r2);
+        const rr=[0,0.1739274226,0.3260725774,0.3260725774,0.1739274226];
+        const vv=[0,0.0694318442,0.3300094782,1-0.3300094782,1-0.0694318442];
+        const w=jsk-xyk;
+        let xs=0, ys=0;
+        for(let i=1;i<5;i++){
+            const ff = f0 + q*vv[i]*w*(c + vv[i]*w*d);
+            xs += rr[i]*Math.cos(ff);
+            ys += rr[i]*Math.sin(ff);
+        }
+        let fhz3 = f0 + q*w*(c + w*d);
+        if(fhz3<0) fhz3+=2*Math.PI;
+        if(fhz3>=2*Math.PI) fhz3-=2*Math.PI;
+        return [xyx + w*xs + jsb*Math.cos(fhz3+jd),
+                xyy + w*ys + jsb*Math.sin(fhz3+jd), fhz3];
+    },
+    hua_Dantiaoxianludange(pqx, k, b, z) {
+        for(let i=0;i<pqx.length;i++){
+            const [dtk,dtx,dty,dtfwj,dtcd,dtr1,dtr2,dtzy] = pqx[i];
+            if(k>=dtk && k<=dtk+dtcd){
+                const hudu = this.hua_DmsToRadians(dtfwj);
+                const js = this.hua_Zs(dtk,dtx,dty,hudu,dtcd,dtr1,dtr2,dtzy,k,b,z);
+                return [Math.round(js[0]*1000)/1000, Math.round(js[1]*1000)/1000, js[2]];
+            }
+        }
+        return [0,0,0];
+    },
+    hua_Fs(pqx, fsx, fsy) {
+        let jljd = this.hua_Fwj(pqx[0][1], pqx[0][2], fsx, fsy);
+        let k = pqx[0][0];
+        const hudu = this.hua_DmsToRadians(pqx[0][3]);
+        let cz = jljd[0]*Math.cos(jljd[1]-hudu);
+        let pj = jljd[0]*Math.sin(jljd[1]-hudu);
+        const qdlc = pqx[0][0];
+        const zdlc = pqx[pqx.length-1][0] + pqx[pqx.length-1][4];
+        let iter=0;
+        while(Math.abs(cz) > 0.01) {
+            k += cz;
+            iter++;
+            if(k<qdlc) return [-1,-1];
+            if(k>zdlc) return [-2,-2];
+            if(iter>15) return [-3,-3];
+            const xy = this.hua_Dantiaoxianludange(pqx, k, 0, 0);
+            jljd = this.hua_Fwj(xy[0], xy[1], fsx, fsy);
+            cz = jljd[0]*Math.cos(jljd[1]-xy[2]);
+            pj = jljd[0]*Math.sin(jljd[1]-xy[2]);
+        }
+        return [Math.round(k*1000)/1000, Math.round(pj*1000)/1000];
+    },
+    // ---------- 新增：快速生成线路点列 ----------
+    hua_Dantiaoxianlu(pqx, startK, endK, step, b, z) {
+        if (!pqx || pqx.length === 0) return null;
+        const rowCount = pqx.length;
+        const realStart = (startK !== undefined && startK !== null) ? startK : pqx[0][0];
+        const realEnd = (endK !== undefined && endK !== null) ? endK : (pqx[rowCount-1][0] + pqx[rowCount-1][4]);
+        if (realStart > realEnd || step <= 0) return null;
+        const kList = [];
+        kList.push(realStart);
+        const firstMultiple = Math.ceil(realStart / step) * step;
+        if (Math.abs(firstMultiple - realStart) > 1e-9) kList.push(firstMultiple);
+        for (let k = firstMultiple + step; k <= realEnd - 1e-9; k += step) kList.push(k);
+        if (Math.abs(kList[kList.length-1] - realEnd) > 1e-9) kList.push(realEnd);
+
+        const points = [];
+        let pointIdx = 0;
+        const totalPoints = kList.length;
+        const bVal = (b !== undefined && b !== null) ? b : 0;
+        const zVal = (z !== undefined && z !== null) ? z : 0;
+
+        for (let i = 0; i < rowCount && pointIdx < totalPoints; i++) {
+            const segStart = pqx[i][0];
+            const segEnd = segStart + pqx[i][4];
+            const startX = pqx[i][1];
+            const startY = pqx[i][2];
+            const azimuthRad = this.hua_DmsToRadians(pqx[i][3]);
+            const length = pqx[i][4];
+            const r1 = pqx[i][5];
+            const r2 = pqx[i][6];
+            const turn = pqx[i][7];
+            while (pointIdx < totalPoints && kList[pointIdx] <= segEnd + 1e-9) {
+                const currentK = kList[pointIdx];
+                if (currentK < segStart - 1e-9) { pointIdx++; continue; }
+                const result = this.hua_Zs(segStart, startX, startY, azimuthRad, length, r1, r2, turn, currentK, bVal, zVal);
+                points.push([currentK, result[0], result[1], result[2]]);
+                pointIdx++;
+            }
+        }
+        const count = points.length;
+        const matrix = new Array(count);
+        for (let i = 0; i < count; i++) {
+            matrix[i] = [points[i][0], points[i][1], points[i][2], points[i][3]];
+        }
+        return matrix;
+    },
+    // ---------- 高斯投影 ----------
+    hua_Gauss_proj(L, B, lonCenter) {
+        if (lonCenter === undefined) lonCenter = 360.0;
+        const pi = Math.PI;
+        const p0 = 206264.8062470963551564;
+        const e = 0.00669438002290;
+        const e1 = 0.00673949677548;
+        const b = 6356752.3141;
+        const a = 6378137.0;
+        B = B * pi / 180;
+        L = L * pi / 180;
+        let L_num, L_center;
+        if (lonCenter >= 359) {
+            L_num = Math.floor(L * 180 / pi / 3.0 + 0.5);
+            L_center = 3 * L_num;
+        } else {
+            L_center = lonCenter;
+        }
+        const l = (L / pi * 180 - L_center) * 3600;
+        const M0 = a * (1 - e);
+        const M2 = 3.0 / 2.0 * e * M0;
+        const M4 = 5.0 / 4.0 * e * M2;
+        const M6 = 7.0 / 6.0 * e * M4;
+        const M8 = 9.0 / 8.0 * e * M6;
+        const a0 = M0 + M2 / 2.0 + 3.0 / 8.0 * M4 + 5.0 / 16.0 * M6 + 35.0 / 128.0 * M8;
+        const a2 = M2 / 2.0 + M4 / 2 + 15.0 / 32.0 * M6 + 7.0 / 16.0 * M8;
+        const a4 = M4 / 8.0 + 3.0 / 16.0 * M6 + 7.0 / 32.0 * M8;
+        const a6 = M6 / 32.0 + M8 / 16.0;
+        const a8 = M8 / 128.0;
+        const Xz = a0 * B - a2 / 2.0 * Math.sin(2 * B) + a4 / 4.0 * Math.sin(4 * B) - a6 / 6.0 * Math.sin(6 * B) + a8 / 8.0 * Math.sin(8 * B);
+        const c = a * a / b;
+        const V = Math.sqrt(1 + e1 * Math.cos(B) * Math.cos(B));
+        const N = c / V;
+        const t = Math.tan(B);
+        const n = e1 * Math.cos(B) * Math.cos(B);
+        const m1 = N * Math.cos(B);
+        const m2 = N / 2.0 * Math.sin(B) * Math.cos(B);
+        const m3 = N / 6.0 * Math.pow(Math.cos(B), 3) * (1 - t * t + n);
+        const m4 = N / 24.0 * Math.sin(B) * Math.pow(Math.cos(B), 3) * (5 - t * t + 9 * n);
+        const m5 = N / 120.0 * Math.pow(Math.cos(B), 5) * (5 - 18 * t * t + Math.pow(t, 4) + 14 * n - 58 * n * t * t);
+        const m6 = N / 720.0 * Math.sin(B) * Math.pow(Math.cos(B), 5) * (61 - 58 * t * t + Math.pow(t, 4));
+        const x = Xz + m2 * l * l / Math.pow(p0, 2) + m4 * Math.pow(l, 4) / Math.pow(p0, 4) + m6 * Math.pow(l, 6) / Math.pow(p0, 6);
+        const y0 = m1 * l / p0 + m3 * Math.pow(l, 3) / Math.pow(p0, 3) + m5 * Math.pow(l, 5) / Math.pow(p0, 5);
+        const y = y0 + 500000;
+        return [x, y, L_center];
+    },
+    hua_Gauss_unproj(x, y, l0) {
+        const pi = Math.PI;
+        const e = 0.00669438002290;
+        const e1 = 0.00673949677548;
+        const b = 6356752.3141;
+        const a = 6378137.0;
+        const y1 = y - 500000;
+        const M0 = a * (1 - e);
+        const M2 = 3.0 / 2.0 * e * M0;
+        const M4 = 5.0 / 4.0 * e * M2;
+        const M6 = 7.0 / 6.0 * e * M4;
+        const M8 = 9.0 / 8.0 * e * M6;
+        const a0 = M0 + M2 / 2.0 + 3.0 / 8.0 * M4 + 5.0 / 16.0 * M6 + 35.0 / 128.0 * M8;
+        const a2 = M2 / 2.0 + M4 / 2 + 15.0 / 32.0 * M6 + 7.0 / 16.0 * M8;
+        const a4 = M4 / 8.0 + 3.0 / 16.0 * M6 + 7.0 / 32.0 * M8;
+        const a6 = M6 / 32.0 + M8 / 16.0;
+        let Bf = x / a0;
+        let B0 = Bf;
+        while (Math.abs(Bf - B0) > 0.0000001 || B0 === Bf) {
+            B0 = Bf;
+            const FBf = -a2 / 2.0 * Math.sin(2 * B0) + a4 / 4.0 * Math.sin(4 * B0) - a6 / 6.0 * Math.sin(6 * B0);
+            Bf = (x - FBf) / a0;
+        }
+        const t = Math.tan(Bf);
+        const c = a * a / b;
+        const V = Math.sqrt(1 + e1 * Math.cos(Bf) * Math.cos(Bf));
+        const N = c / V;
+        const M = c / Math.pow(V, 3);
+        const n = e1 * Math.cos(Bf) * Math.cos(Bf);
+        const n1 = 1 / (N * Math.cos(Bf));
+        const n2 = -t / (2.0 * M * N);
+        const n3 = -(1 + 2 * t * t + n) / (6.0 * Math.pow(N, 3) * Math.cos(Bf));
+        const n4 = t * (5 + 3 * t * t + n - 9 * n * t * t) / (24.0 * M * Math.pow(N, 3));
+        const n5 = (5 + 28 * t * t + 24 * Math.pow(t, 4) + 6 * n + 8 * n * t * t) / (120.0 * Math.pow(N, 5) * Math.cos(Bf));
+        const n6 = -t * (61 + 90 * t * t + 45 * Math.pow(t, 4)) / (720.0 * M * Math.pow(N, 5));
+        const B = (Bf + n2 * y1 * y1 + n4 * Math.pow(y1, 4) + n6 * Math.pow(y1, 6)) / pi * 180;
+        const l = n1 * y1 + n3 * Math.pow(y1, 3) + n5 * Math.pow(y1, 5);
+        const L = l0 + l / pi * 180;
+        return [L, B];
+    },
+    // ---------- UTM ----------
+    hua_Utm_proj(lon, lat) {
+        const a = 6378137, f = 1/298.257223563;
+        const e2 = 2*f - f*f, e2p = e2/(1-e2);
+        const k0 = 0.9996, FE = 500000, FN = 10000000;
+        const zone = Math.floor((lon+180)/6) + 1;
+        const cm = (zone-1)*6 - 180 + 3;
+        const latRad = lat*Math.PI/180, lonRad = lon*Math.PI/180, cmRad = cm*Math.PI/180;
+        const N = a / Math.sqrt(1 - e2*Math.sin(latRad)**2);
+        const T = Math.tan(latRad)**2;
+        const C = e2p * Math.cos(latRad)**2;
+        const A = (lonRad - cmRad) * Math.cos(latRad);
+        const M = a * ((1 - e2/4 - 3*e2**2/64 - 5*e2**3/256)*latRad
+            - (3*e2/8 + 3*e2**2/32 + 45*e2**3/1024)*Math.sin(2*latRad)
+            + (15*e2**2/256 + 45*e2**3/1024)*Math.sin(4*latRad)
+            - (35*e2**3/3072)*Math.sin(6*latRad));
+        const easting = k0 * N * (A + (1-T+C)*A**3/6 + (5-18*T+T**2+72*C-58*e2p)*A**5/120) + FE;
+        let northing = k0 * (M + N*Math.tan(latRad)*(A**2/2 + (5-T+9*C+4*C**2)*A**4/24 + (61-58*T+T**2+600*C-330*e2p)*A**6/720));
+        if (lat < 0) northing += FN;
+        return [northing, easting, zone];
+    },
+    hua_Utm_unproj(northing, easting, isNorthern, zoneNumber) {
+        const a = 6378137, f = 1/298.257223563;
+        const e2 = 2*f - f*f, e2p = e2/(1-e2);
+        const k0 = 0.9996, FE = 500000, FN = 10000000;
+        const x = easting - FE;
+        const y = isNorthern ? northing : northing - FN;
+        const cm = (zoneNumber-1)*6 - 180 + 3;
+        const lonCenterRad = cm * Math.PI / 180;
+        const M = y / k0;
+        const mu = M / (a * (1 - e2/4 - 3*e2**2/64 - 5*e2**3/256));
+        const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+        const phi1Rad = mu + (3*e1/2 - 27*e1**3/32)*Math.sin(2*mu) + (21*e1**2/16 - 55*e1**4/32)*Math.sin(4*mu) + (151*e1**3/96)*Math.sin(6*mu);
+        const N1 = a / Math.sqrt(1 - e2*Math.sin(phi1Rad)**2);
+        const T1 = Math.tan(phi1Rad)**2;
+        const C1 = e2p * Math.cos(phi1Rad)**2;
+        const R1 = a * (1 - e2) / (1 - e2*Math.sin(phi1Rad)**2)**1.5;
+        const D = x / (N1 * k0);
+        const latRad = phi1Rad - (N1*Math.tan(phi1Rad)/R1)*(D**2/2 - (5+3*T1+10*C1-4*C1**2-9*e2p)*D**4/24 + (61+90*T1+298*C1+45*T1**2-252*e2p-3*C1**2)*D**6/720);
+        const lonRad = lonCenterRad + (D - (1+2*T1+C1)*D**3/6 + (5-2*C1+28*T1-3*C1**2+8*e2p+24*T1**2)*D**5/120) / Math.cos(phi1Rad);
+        return [lonRad * 180 / Math.PI, latRad * 180 / Math.PI];
+    },
+    utm_zone(lon) {
+        return Math.floor((lon+180)/6) + 1;
+    },
+    // ---------- 四参数 ----------
+    hua_Cs4(source, target) {
+        if (!source || !target || source.length !== target.length) return [0,0,0,1];
+        if (source.length < 4 || source.length % 2 !== 0) return [0,0,0,1];
+        const pointCount = source.length / 2;
+        let sumX1 = 0, sumY1 = 0, sumX2 = 0, sumY2 = 0;
+        for (let i = 0; i < pointCount; i++) {
+            sumX1 += source[2*i];
+            sumY1 += source[2*i+1];
+            sumX2 += target[2*i];
+            sumY2 += target[2*i+1];
+        }
+        const meanX1 = sumX1 / pointCount, meanY1 = sumY1 / pointCount;
+        const meanX2 = sumX2 / pointCount, meanY2 = sumY2 / pointCount;
+        const centeredSource = new Array(source.length);
+        const centeredTarget = new Array(target.length);
+        for (let i = 0; i < pointCount; i++) {
+            centeredSource[2*i] = source[2*i] - meanX1;
+            centeredSource[2*i+1] = source[2*i+1] - meanY1;
+            centeredTarget[2*i] = target[2*i] - meanX2;
+            centeredTarget[2*i+1] = target[2*i+1] - meanY2;
+        }
+        let H11 = 0, H12 = 0, H21 = 0, H22 = 0;
+        let B1 = 0, B2 = 0;
+        for (let i = 0; i < pointCount; i++) {
+            const x1 = centeredSource[2*i], y1 = centeredSource[2*i+1];
+            const x2 = centeredTarget[2*i], y2 = centeredTarget[2*i+1];
+            H11 += x1*x1 + y1*y1;
+            H22 += x1*x1 + y1*y1;
+            B1 += x1*x2 + y1*y2;
+            B2 += x1*y2 - y1*x2;
+        }
+        const det = H11*H22 - H12*H21;
+        if (Math.abs(det) < 1e-15) return [0,0,0,1];
+        const a = (H22*B1 - H12*B2) / det;
+        const b = (-H21*B1 + H11*B2) / det;
+        const scale = Math.sqrt(a*a + b*b);
+        const rotation = Math.atan2(b, a);
+        const deltaX = meanX2 - (a*meanX1 - b*meanY1);
+        const deltaY = meanY2 - (b*meanX1 + a*meanY1);
+        return [deltaX, deltaY, rotation, scale];
+    },
+    hua_FourParameterTransform(x, y, dx, dy, rot, scale) {
+        return [scale*(x*Math.cos(rot)-y*Math.sin(rot))+dx, scale*(x*Math.sin(rot)+y*Math.cos(rot))+dy];
+    },
+    // ---------- 批量转换 ----------
+    mapGps2XyBatch(lonlatPoints, proj, controlLonLat, controlXy, center) {
+        // 省略，保留占位（实际未使用）
+        return lonlatPoints.map(() => [0,0]);
+    },
+    mapXy2GpsBatch(xyPoints, proj, controlLonLat, controlXy) {
+        return xyPoints.map(() => [0,0]);
+    },
+    // ---------- 填挖方 & 偏移（占位） ----------
+    hua_CutAndFillArea(dmx, sjx, extendDist) { return [0,0,0,0,0,0,0]; },
+    hua_OffsetPolyline(points, offset) { return points; }
+};
+// ========================================================================
+// 2. 数据配置（请在此粘贴您的 CONFIG 对象）
+// ========================================================================
+const CONFIG ={
+    "tile": "ccecc-73",
+    "proj": "utm",
+    "center": 32.4602819,
+    "south": true,
+    "data": [{
+            "B": -3.725201639,
+            "L": 32.50374233,
+            "x": 9588533.76,
+            "y": 444814.013
+        },
+        {
+            "B": -3.723555306,
+            "L": 32.503639083,
+            "x": 9588715.735,
+            "y": 444802.432
+        },
+        {
+            "B": -3.699971972,
+            "L": 32.49289606,
+            "x": 9591321.926,
+            "y": 443608.008
+        }
+    ],
+    "roads": [{
+            "name": "卡哈马",
+            "pqx": [
+                [57415.25, 9635916.871, 433821.2856, 181.06251, 609.0806, 0, 0, 0],
+                [58024.3306, 9635307.904, 433809.5186, 181.06251, 21.2785, 1000, 1000, 1],
+                [58045.6091, 9635286.636, 433808.8813, 182.19341, 263.7872, 0, 0, 0],
+                [58309.3964, 9635023.066, 433798.1747, 182.19341, 60.8789, 1000, 1000, -1],
+                [58370.2753, 9634962.2, 433797.5563, 178.5017, 60.0537, 0, 0, 0],
+                [58430.329, 9634902.158, 433798.7741, 177.46044, 90.4968, 0, 0, 0],
+                [58520.8258, 9634811.73, 433802.2988, 177.46044, 111.0822, 1000, 1000, 1],
+                [58631.908, 9634700.72, 433800.4577, 184.07567, 144.8748, 0, 0, 0],
+                [58776.7828, 9634556.222, 433790.0178, 184.07567, 35.3104, 1000, 1000, -1],
+                [58812.0932, 9634520.966, 433788.0955, 182.06334, 263.8786, 0, 0, 0],
+                [59075.9719, 9634257.266, 433778.3833, 182.06334, 18.4952, 1000, 1000, -1],
+                [59094.467, 9634238.778, 433777.8735, 181.02585, 193.6847, 0, 0, 0],
+                [59288.1518, 9634045.126, 433774.3257, 181.02585, 161.4448, 1000, 1000, -1],
+                [59449.5966, 9633884.17, 433784.383, 171.47581, 15.1382, 0, 0, 0],
+                [59464.7347, 9633869.187, 433786.5422, 171.47581, 176.9398, 1000, 1000, 1],
+                [59641.6746, 9633692.742, 433796.1957, 181.56146, 128.4024, 0, 0, 0],
+                [59770.077, 9633564.413, 433791.8547, 181.56146, 62.5, 0, 500, -1],
+                [59832.577, 9633501.929, 433791.0436, 178.2123, 82.9742, 500, 500, -1],
+                [59915.5511, 9633419.566, 433800.2787, 168.50537, 62.5, 500, 0, -1],
+                [59978.0511, 9633358.813, 433814.9079, 165.16022, 28.9751, 0, 0, 0],
+                [60007.0263, 9633330.791, 433822.2766, 165.16022, 63.4706, 1000, 1000, -1],
+                [60070.4968, 9633269.96, 433840.3544, 161.37504, 460.926, 0, 0, 0],
+                [60531.4228, 9632832.521, 433985.611, 161.37504, 5.4006, 1000, 1000, -1],
+                [60536.8234, 9632827.4, 433987.3268, 161.19165, 410.4367, 0, 0, 0],
+                [60947.2602, 9632438.581, 434118.774, 161.19165, 56.3205, 1000, 1000, 1],
+                [61003.5807, 9632384.748, 434135.2997, 164.32534, 209.1827, 0, 0, 0],
+                [61212.7633, 9632183.126, 434191.0318, 164.32534, 62.5, 0, 1500, 1],
+                [61275.2633, 9632122.772, 434207.2645, 165.44306, 66.2763, 1500, 1500, 1],
+                [61341.5396, 9632058.198, 434222.1637, 168.16243, 62.5, 1500, 0, 1],
+                [61404.0396, 9631996.833, 434234.0149, 169.28014, 570.5786, 0, 0, 0],
+                [61974.6182, 9631435.869, 434338.3171, 169.28014, 46.6076, 1000, 1000, 1],
+                [62021.2258, 9631389.864, 434345.7662, 172.08149, 158.302, 0, 0, 0],
+                [62179.5278, 9631233.051, 434367.4214, 174.20016, 140.4183, 0, 0, 0],
+                [62319.9461, 9631093.318, 434381.2853, 174.20016, 14.3168, 1000, 1000, -1],
+                [62334.2629, 9631079.082, 434382.8008, 173.30486, 52.3782, 0, 0, 0],
+                [62386.6411, 9631027.039, 434388.7179, 173.30486, 508.5577, 31551.4651, 31551.4651, 1],
+                [62895.1987, 9630521.296, 434442.0945, 174.26132, 326.0392, 0, 0, 0],
+                [63221.2379, 9630196.792, 434473.7007, 174.26132, 62.5, 0, 1200, 1],
+                [63283.7379, 9630134.538, 434479.2191, 175.55447, 152.6022, 1200, 1200, 1],
+                [63436.3401, 9629982.043, 434480.3577, 183.12551, 62.5, 1200, 0, 1],
+                [63498.8401, 9629919.714, 434475.7696, 184.42266, 137.7023, 0, 0, 0],
+                [63636.5423, 9629782.476, 434464.4688, 184.42266, 81.1251, 1000, 1000, -1],
+                [63717.6675, 9629701.443, 434461.0961, 180.03333, 379.464, 0, 0, 0],
+                [64097.1314, 9629321.98, 434460.7037, 180.03333, 62.5, 0, 500, 1],
+                [64159.6314, 9629259.505, 434459.3373, 183.38249, 46.5571, 500, 500, 1],
+                [64206.1886, 9629213.247, 434454.224, 188.58311, 62.5, 500, 0, 1],
+                [64268.6886, 9629151.982, 434441.9125, 192.33226, 166.8917, 0, 0, 0],
+                [64435.5803, 9628989.082, 434405.6304, 192.33226, 173.4325, 1971.3831, 1971.3831, 1],
+                [64609.0128, 9628821.673, 434360.5335, 197.35488, 189.5855, 0, 0, 0],
+                [64798.5983, 9628640.959, 434303.2184, 197.35488, 187.0695, 500, 500, 1],
+                [64985.6677, 9628477.231, 434215.0039, 219.02005, 301.3002, 0, 0, 0],
+                [65286.968, 9628243.188, 434025.2528, 219.02005, 62.5, 0, 1000, -1],
+                [65349.468, 9628194.234, 433986.4015, 217.14347, 120.3563, 1000, 1000, -1],
+                [65469.8243, 9628094.274, 433919.4968, 210.20494, 62.5, 1000, 0, -1],
+                [65532.3243, 9628039.694, 433889.0513, 208.33236, 439.9148, 0, 0, 0],
+                [65972.2391, 9627653.297, 433678.7605, 208.33236, 27.1715, 1000, 1000, -1],
+                [65999.4106, 9627629.257, 433666.0977, 206.59591, 109.8586, 0, 0, 0],
+                [66109.2692, 9627531.372, 433616.2233, 206.59591, 39.0319, 1000, 1000, -1],
+                [66148.3011, 9627496.258, 433599.1865, 204.45482, 286.2197, 0, 0, 0],
+                [66434.5208, 9627236.357, 433479.2971, 204.45482, 148.49, 1688.8424, 1688.8424, 1],
+                [66583.0108, 9627104.428, 433411.255, 209.48039, 318.1712, 0, 0, 0],
+                [66901.182, 9626828.333, 433253.1271, 209.48039, 62.5, 0, 300, -1],
+                [66963.682, 9626773.079, 433223.9805, 203.4958, 61.3363, 300, 300, -1],
+                [67025.0182, 9626714.839, 433205.0844, 192.07063, 62.5, 300, 0, -1],
+                [67087.5182, 9626652.998, 433196.2399, 186.09003, 60.6745, 0, 0, 0],
+                [67148.1927, 9626592.673, 433189.7396, 186.09003, 62.5, 0, 300, -1],
+                [67210.6927, 9626530.367, 433185.207, 180.10544, 133.3175, 300, 300, -1],
+                [67344.0102, 9626401.303, 433213.936, 154.4312, 62.5, 300, 0, -1],
+                [67406.5102, 9626346.803, 433244.4687, 148.45061, 305.8831, 0, 0, 0],
+                [67712.3934, 9626085.295, 433403.1449, 148.45061, 237.127, 1000, 1000, -1],
+                [67949.5204, 9625898.98, 433548.928, 135.09552, 115.9626, 0, 0, 0],
+                [68065.483, 9625816.745, 433630.689, 135.09552, 62.5, 0, 650, 1],
+                [68127.983, 9625771.728, 433674.0351, 137.55117, 264.5312, 650, 650, 1],
+                [68392.5142, 9625545.187, 433807.0589, 161.14156, 62.5, 650, 0, 1],
+                [68455.0142, 9625485.4, 433825.2529, 163.59321, 459.88, 0, 0, 0],
+                [68914.8942, 9625043.353, 433952.0727, 163.59321, 62.5, 0, 1300, 1],
+                [68977.3942, 9624983.141, 433968.8258, 165.22104, 268.0186, 1300, 1300, 1],
+                [69245.4127, 9624718.693, 434009.4063, 177.10557, 62.5, 1300, 0, 1],
+                [69307.9127, 9624656.229, 434011.478, 178.33339, 107.7011, 0, 0, 0],
+                [69415.6138, 9624548.562, 434014.1857, 178.33339, 62.5, 0, 500, -1],
+                [69478.1138, 9624486.138, 434017.0576, 174.58424, 39.0895, 500, 500, -1],
+                [69517.2033, 9624447.372, 434021.997, 170.29568, 62.5, 500, 0, -1],
+                [69579.7033, 9624386.224, 434034.87, 166.55053, 796.8251, 0, 0, 0],
+                [70376.5284, 9623610.078, 434215.2258, 166.55053, 62.5, 0, 500, 1],
+                [70439.0284, 9623548.929, 434228.0988, 170.29568, 78.2201, 500, 500, 1],
+                [70517.2485, 9623471.088, 434234.9352, 179.27449, 62.5, 500, 0, 1],
+                [70579.7485, 9623408.632, 434232.9181, 183.02365, 62.796, 0, 0, 0],
+                [70642.5445, 9623345.924, 434229.584, 183.02365, 62.5, 0, 800, -1],
+                [70705.0445, 9623283.479, 434227.0787, 180.48193, 75.6377, 800, 800, -1],
+                [70780.6822, 9623207.911, 434229.5898, 175.23175, 62.5, 800, 0, -1],
+                [70843.1822, 9623145.77, 434236.2351, 173.09003, 866.6594, 0, 0, 0],
+                [71709.8416, 9622285.296, 434339.6007, 173.09003, 49.628, 10000, 10000, 1],
+                [71759.4696, 9622236.008, 434345.3975, 173.26039, 2356.4152, 0, 0, 0],
+                [74115.8848, 9619895.047, 434614.8305, 173.26039, 13.5367, 10000, 10000, -1],
+                [74129.4215, 9619881.6, 434616.3873, 173.21247, 2367.2832, 0, 0, 0],
+                [76496.7047, 9617530.211, 434890.2462, 173.21247, 52.08, 40000, 40000, 1],
+                [76548.7847, 9617478.477, 434896.2374, 173.25533, 803.1979, 0, 0, 0],
+                [77351.9826, 9616680.551, 434988.1164, 173.25533, 555.2728, 54343.3584, 54343.3584, 1],
+                [77907.2554, 9616128.609, 435048.8156, 174.01009, 2794.6509, 0, 0, 0],
+                [80701.9063, 9613349.181, 435340.1159, 174.01009, 62.5, 0, 2000, 1],
+                [80764.4063, 9613286.989, 435346.3067, 174.54438, 251.4376, 2000, 2000, 1],
+                [81015.8439, 9613035.801, 435352.824, 182.06551, 62.5, 2000, 0, 1],
+                [81078.3439, 9612973.372, 435349.8667, 183.0038, 1671.5292, 0, 0, 0],
+                [82749.8731, 9611304.15, 435262.078, 183.0038, 3.4221, 1000, 1000, 1],
+                [82753.2952, 9611300.733, 435261.8924, 183.12239, 710.8882, 0, 0, 0],
+                [83464.1835, 9610590.958, 435222.1274, 183.12239, 6.3892, 1000, 1000, -1],
+                [83470.5727, 9610584.577, 435221.7904, 182.5026, 300.4334, 0, 0, 0],
+                [83771.0061, 9610284.513, 435206.9019, 182.5026, 62.5, 0, 250, -1],
+                [83833.5061, 9610222.058, 435206.4075, 175.40429, 102.5998, 250, 250, -1],
+                [83936.1059, 9610124.162, 435234.6239, 152.0952, 62.5, 250, 0, -1],
+                [83998.6059, 9610071.552, 435268.2833, 145.00089, 83.2169, 0, 0, 0],
+                [84081.8228, 9610003.382, 435316.0117, 145.00089, 28.3669, 1000, 1000, 1],
+                [84110.1897, 9609979.917, 435331.9495, 146.374, 71.5044, 0, 0, 0],
+                [84181.6941, 9609920.203, 435371.2824, 146.374, 5.1884, 1000, 1000, 1],
+                [84186.8825, 9609915.863, 435374.1251, 146.55302, 626.7151, 0, 0, 0],
+                [84813.5977, 9609390.702, 435716.1459, 146.55302, 161.6843, 40000, 40000, -1],
+                [84975.282, 9609255.396, 435804.6564, 146.41364, 255.5573, 0, 0, 0],
+                [85230.8393, 9609041.816, 435944.9876, 146.41364, 313.1499, 12000, 12000, 1],
+                [85543.9892, 9608777.888, 436113.5098, 148.11191, 952.3731, 0, 0, 0],
+                [86496.3623, 9607968.573, 436615.5289, 148.11191, 187.8487, 150000, 150000, 1],
+                [86684.211, 9607808.879, 436714.4485, 148.15374, 786.4076, 0, 0, 0],
+                [87470.6186, 9607140.081, 437128.146, 148.15374, 176.7177, 35000, 35000, 1],
+                [87647.3364, 9606989.558, 437220.7302, 148.32588, 1726.28, 0, 0, 0],
+                [89373.6164, 9605516.881, 438121.4325, 148.32588, 62.5, 0, 400, 1],
+                [89436.1164, 9605462.746, 438152.6347, 153.01333, 117.5927, 400, 400, 1],
+                [89553.7091, 9605351.665, 438189.9143, 169.52114, 62.5, 400, 0, 1],
+                [89616.2091, 9605289.667, 438197.687, 174.20458, 68.0771, 0, 0, 0],
+                [89684.2862, 9605221.921, 438204.3939, 174.20458, 62.5, 0, 450, -1],
+                [89746.7862, 9605159.898, 438211.9877, 170.22019, 99.2976, 450, 450, -1],
+                [89846.0838, 9605064.619, 438239.2263, 157.43272, 62.5, 450, 0, -1],
+                [89908.5838, 9605007.954, 438265.5635, 153.44433, 7.7767, 0, 0, 0],
+                [89916.3605, 9605000.979, 438269.0036, 153.44433, 62.5, 0, 350, 1],
+                [89978.8605, 9604944.149, 438294.9619, 158.51398, 82.1383, 350, 350, 1],
+                [90060.9988, 9604864.779, 438315.364, 172.18262, 62.5, 350, 0, 1],
+                [90123.4988, 9604802.476, 438320.0291, 177.25227, 549.8612, 0, 0, 0],
+                [90673.36, 9604253.171, 438344.7522, 177.25227, 442.2533, 50000, 50000, 1],
+                [91115.6133, 9603811.283, 438362.6829, 177.55471, 1038.4859, 0, 0, 0],
+                [92154.0992, 9602773.475, 438400.198, 177.55471, 250.7762, 50000, 50000, -1],
+                [92404.8753, 9602522.886, 438409.8857, 177.38326, 2982.1079, 0, 0, 0],
+                [95386.9832, 9599543.302, 438532.5594, 177.38326, 215.583, 350000, 350000, 1],
+                [95602.5662, 9599327.899, 438541.3614, 177.40396, 947.2098, 0, 0, 0],
+                [96549.776, 9598381.467, 438579.7434, 177.40396, 224.6979, 60000, 60000, 1],
+                [96774.4739, 9598156.937, 438588.428, 177.53321, 670.6375, 0, 0, 0],
+                [97445.1115, 9597486.754, 438613.0934, 177.53321, 62.5, 0, 250, -1],
+                [97507.6115, 9597424.489, 438617.988, 170.4349, 202.4505, 250, 250, -1],
+                [97710.062, 9597258.314, 438723.7262, 124.19553, 62.5, 250, 0, -1],
+                [97772.562, 9597227.505, 438778.055, 117.10122, 112.2485, 0, 0, 0],
+                [97884.8104, 9597176.248, 438877.9175, 117.10122, 261.836, 5000, 5000, -1],
+                [98146.6464, 9597062.838, 439113.8846, 114.10107, 526.3839, 0, 0, 0],
+                [98673.0304, 9596847.315, 439594.1242, 114.10107, 62.5, 0, 5500, 1],
+                [98735.5304, 9596821.617, 439651.0967, 114.29427, 385.685, 5500, 5500, 1],
+                [99121.2153, 9596649.536, 439996.1764, 118.30469, 62.5, 5500, 0, 1],
+                [99183.7153, 9596619.493, 440050.9822, 118.50189, 205.1984, 0, 0, 0],
+                [99388.9138, 9596520.517, 440230.7323, 118.50189, 62.5, 0, 750, 1],
+                [99451.4138, 9596489.616, 440285.053, 121.13332, 179.869, 750, 750, 1],
+                [99631.2827, 9596378.905, 440426.2663, 134.58008, 62.5, 750, 0, 1],
+                [99693.7827, 9596333.529, 440469.2389, 137.21151, 180.6808, 0, 0, 0],
+                [99874.4635, 9596200.628, 440591.6436, 137.21151, 639.5674, 56150.8152, 56150.8152, -1],
+                [100514.0309, 9595732.668, 441027.5974, 136.42057, 218.9573, 0, 0, 0],
+                [100732.9882, 9595573.313, 441177.7579, 136.42057, 62.5, 0, 800, 1],
+                [100795.4882, 9595527.275, 441220.0215, 138.56229, 120.9832, 800, 800, 1],
+                [100916.4714, 9595430.401, 441292.3024, 147.36162, 62.5, 800, 0, 1],
+                [100978.9714, 9595376.777, 441324.3998, 149.50334, 493.7475, 0, 0, 0],
+                [101472.719, 9594949.859, 441572.4472, 149.50334, 173.8199, 35000, 35000, -1],
+                [101646.5388, 9594799.784, 441660.1432, 149.3329, 475.5559, 0, 0, 0],
+                [102122.0948, 9594389.786, 441901.0907, 149.30278, 263.4457, 0, 0, 0],
+                [102385.5405, 9594162.776, 442034.769, 149.30278, 185.373, 15000, 15000, 1],
+                [102570.9135, 9594002.463, 442127.842, 150.12568, 103.3261, 0, 0, 0],
+                [102674.2395, 9593912.786, 442179.1676, 150.12568, 492.0995, 22969.7264, 22969.7264, 1],
+                [103166.339, 9593483.106, 442419.0171, 151.26358, 596.2285, 0, 0, 0],
+                [103762.5676, 9592959.412, 442704.0313, 151.26358, 302.168, 15826.0103, 15826.0103, -1],
+                [104064.7355, 9592695.4, 442851.0011, 150.20576, 333.1681, 0, 0, 0],
+                [104397.9036, 9592405.858, 443015.8229, 150.20576, 407.3939, 5000, 5000, 1],
+                [104805.2975, 9592043.994, 443202.7264, 155.01038, 353.6401, 0, 0, 0],
+                [105158.9376, 9591723.441, 443352.0821, 155.01038, 174.5572, 500, 500, -1],
+                [105333.4948, 9591581.149, 443451.6557, 135.00538, 101.8598, 0, 0, 0],
+                [105435.3546, 9591509.105, 443523.6627, 135.00538, 156.9473, 500, 500, 1],
+                [105592.3019, 9591382.64, 443615.5195, 152.59592, 114.1897, 0, 0, 0],
+                [105706.4915, 9591280.897, 443667.3609, 152.59592, 84.0818, 500, 500, -1],
+                [105790.5734, 9591209.534, 443711.6383, 143.21529, 30.4519, 0, 0, 0],
+                [105821.0253, 9591185.098, 443729.8095, 143.21529, 80.3335, 1500, 1500, 1],
+                [105901.3588, 9591119.382, 443775.9974, 146.25596, 21.5611, 0, 0, 0],
+                [105922.9199, 9591101.416, 443787.9187, 146.25596, 50, 0, 900, 1],
+                [105972.9199, 9591059.502, 443815.1763, 148.01291, 127.3784, 900, 900, 1],
+                [106100.2983, 9590947.044, 443874.7712, 156.08021, 50, 900, 0, 1],
+                [106150.2983, 9590900.954, 443894.1504, 157.43317, 208.3097, 0, 0, 0],
+                [106358.608, 9590708.189, 443973.1091, 157.43317, 223.6899, 25000, 25000, 1],
+                [106582.2979, 9590500.815, 444056.9704, 158.14173, 268.2217, 0, 0, 0],
+                [106850.5196, 9590251.708, 444156.4135, 158.14173, 183.0945, 120000, 120000, -1],
+                [107033.6141, 9590081.714, 444224.4255, 158.09026, 1413.0683, 0, 0, 0],
+                [108446.6824, 9588770.152, 444750.3221, 158.12436, 355.2296, 0, 0, 0],
+                [108801.9121, 9588440.299, 444882.1732, 157.54558, 419.7689, 0, 0, 0],
+                [109221.6809, 9588051.328, 445039.9952, 157.54558, 151.5801, 35000, 35000, 1],
+                [109373.2611, 9587910.747, 445096.6809, 158.09491, 464.6303, 0, 0, 0],
+                [109837.8914, 9587479.453, 445269.5033, 158.09491, 62.5, 0, 500, -1],
+                [109900.3914, 9587421.945, 445293.9499, 154.34576, 35.1597, 500, 500, -1],
+                [109935.5511, 9587390.745, 445310.1444, 150.33132, 62.5, 500, 0, -1],
+                [109998.0511, 9587337.655, 445343.1046, 146.58216, 1160.376, 0, 0, 0],
+                [111158.4271, 9586364.783, 445975.5549, 146.58216, 205.8722, 15000, 15000, 1],
+                [111364.2994, 9586191.413, 446086.5753, 147.45326, 322.7491, 0, 0, 0],
+                [111687.0485, 9585918.428, 446258.7558, 147.45326, 194.4857, 23000, 23000, -1],
+                [111881.5342, 9585754.371, 446363.2045, 147.16284, 705.2307, 0, 0, 0],
+                [112586.7649, 9585161.081, 446744.462, 147.16284, 383.4104, 31852.1307, 31852.1307, -1],
+                [112970.1753, 9584839.784, 446953.6753, 146.35056, 427.0298, 0, 0, 0],
+                [113397.205, 9584483.341, 447188.8411, 146.35056, 151.2856, 25000, 25000, -1],
+                [113548.4906, 9584357.315, 447272.5358, 146.14174, 705.2055, 0, 0, 0],
+                [114253.6961, 9583771.04, 447664.4482, 146.14174, 150.5333, 30000, 30000, 1],
+                [114404.2294, 9583645.684, 447747.7916, 146.31323, 637.9862, 0, 0, 0],
+                [115042.2156, 9583113.518, 448099.6815, 146.31323, 155.8102, 65000, 65000, -1],
+                [115198.0258, 9582983.655, 448185.7764, 146.23179, 2111.8329, 0, 0, 0],
+                [117309.8587, 9581224.903, 449354.8058, 146.23179, 422.1468, 2000, 2000, -1],
+                [117732.0055, 9580900.511, 449623.7244, 134.17409, 191.7053, 0, 0, 0],
+                [117923.7109, 9580766.634, 449760.9389, 134.17409, 365.533, 2000, 2000, -1],
+                [118289.2439, 9580536.626, 450044.3803, 123.49226, 177.7753, 0, 0, 0],
+                [118467.0192, 9580437.671, 450192.0692, 123.49226, 16.6667, 0, 150, 1],
+                [118483.6859, 9580428.14, 450205.7392, 127.00217, 107.103, 150, 150, 1],
+                [118590.7889, 9580339.755, 450262.1308, 167.54589, 16.6667, 150, 0, 1],
+                [118607.4555, 9580323.342, 450265.0135, 171.05581, 12.0338, 0, 0, 0],
+                [118619.4893, 9580311.453, 450266.8754, 171.05581, 10, 0, 130, 1],
+                [118629.4893, 9580301.555, 450268.2957, 173.18113, 38.9167, 130, 130, 1],
+                [118668.406, 9580262.805, 450267.0243, 190.27186, 10, 130, 0, 1],
+                [118678.406, 9580253.021, 450264.9582, 192.39319, 52.8702, 0, 0, 0]
+            ]
+        },
+        {
+            "name": "卡科拉",
+            "pqx": [
+                [0, 9635919.4561, 433821.3522, 0.1941454, 152.4416, 0, 0, 0],
+                [152.4416, 9636071.8953, 433822.2254, 0.1941454, 62.5, 0, 400, 1],
+                [214.9416, 9636134.3468, 433824.21, 4.4815892, 102.7725, 400, 400, 1],
+                [317.7141, 9636234.5354, 433845.8074, 19.31317485, 62.5, 400, 0, 1],
+                [380.2141, 9636292.2581, 433869.7284, 24.00061865, 256.2125, 0, 0, 0],
+                [636.4265, 9636526.3167, 433973.9464, 24.00061865, 13.204, 1000, 1000, -1],
+                [649.6306, 9636538.4142, 433979.2376, 23.14426561, 153.1397, 0, 0, 0],
+                [802.7703, 9636679.1227, 434039.6767, 23.14426561, 262.9552, 20000, 20000, -1],
+                [1065.7255, 9636921.4076, 434141.8651, 22.29307357, 95.7804, 0, 0, 0],
+                [1161.5059, 9637009.9023, 434178.5061, 22.29307357, 18.4731, 1000, 1000, 1],
+                [1179.979, 9637026.904, 434185.7302, 23.33010902, 805.7172, 0, 0, 0],
+                [1985.6962, 9637765.5128, 434507.6578, 23.33010902, 62.5, 0, 400, 1],
+                [2048.1962, 9637822.1222, 434534.1061, 28.01355282, 83.6848, 400, 400, 1],
+                [2131.881, 9637891.3572, 434580.8409, 40.0048587, 62.5, 400, 0, 1],
+                [2194.381, 9637937.0561, 434623.4525, 44.2923025, 309.4902, 0, 0, 0],
+                [2503.8712, 9638157.839, 434840.3374, 44.2923025, 33.8823, 1000, 1000, 1],
+                [2537.7535, 9638181.603, 434864.4864, 46.25517591, 239.8542, 0, 0, 0],
+                [2777.6077, 9638346.917, 435038.2717, 46.25517591, 47.9416, 1000, 1000, -1],
+                [2825.5494, 9638380.7795, 435072.2024, 43.41030926, 138.8346, 0, 0, 0],
+                [2964.3839, 9638481.1788, 435168.093, 43.41030926, 62.5, 0, 400, -1],
+                [3026.8839, 9638527.4722, 435210.0579, 39.12286546, 95.1805, 400, 400, -1],
+                [3122.0644, 9638607.6542, 435260.9255, 25.34276883, 62.5, 400, 0, -1],
+                [3184.5644, 9638665.3433, 435284.9275, 21.05532503, 67.8193, 0, 0, 0],
+                [3252.3837, 9638728.6164, 435309.3402, 21.05532503, 98.6744, 1000, 1000, 1],
+                [3351.0581, 9638818.7758, 435349.3403, 26.4506311, 498.2668, 0, 0, 0],
+                [3849.3249, 9639263.7107, 435573.623, 26.4506311, 48.0037, 1000, 1000, -1],
+                [3897.3286, 9639307.0784, 435594.1938, 24.00048469, 82.6404, 0, 0, 0],
+                [3979.969, 9639382.5734, 435627.8084, 24.00048469, 62.5, 0, 300, 1],
+                [4042.469, 9639438.7254, 435655.1842, 29.58107643, 131.0626, 300, 300, 1],
+                [4173.5316, 9639534.6109, 435743.0016, 55.00027411, 62.5, 300, 0, 1],
+                [4236.0316, 9639566.8041, 435796.5374, 60.58086584, 81.0478, 0, 0, 0],
+                [4317.0794, 9639606.1351, 435867.4021, 60.58086584, 199.7614, 10000, 10000, 1],
+                [4516.8408, 9639701.3248, 436043.0217, 62.0649033, 549.7832, 0, 0, 0],
+                [5066.6239, 9639958.4692, 436528.9623, 62.0649033, 62.5, 0, 600, 1],
+                [5129.1239, 9639986.7349, 436584.697, 65.05519917, 34.461, 600, 600, 1],
+                [5163.5849, 9640000.34, 436616.3535, 68.23188161, 62.5, 600, 0, 1],
+                [5226.0849, 9640021.3258, 436675.217, 71.22217748, 402.6252, 0, 0, 0],
+                [5628.7101, 9640149.9286, 437056.7512, 71.22217748, 8.6146, 1000.0001, 1000.0001, -1],
+                [5637.3248, 9640152.7153, 437064.9026, 70.52448771, 671.8424, 0, 0, 0],
+                [6309.1672, 9640372.7854, 437699.6793, 70.52448771, 8.3723, 1000, 1000, 1],
+                [6317.5394, 9640375.4947, 437707.601, 71.21317779, 674.603, 0, 0, 0],
+                [6992.1424, 9640591.125, 438346.8136, 71.21317779, 4.9636, 999.9998, 999.9998, -1],
+                [6997.1061, 9640592.7232, 438351.5129, 71.0427952, 274.3117, 0, 0, 0],
+                [7271.4177, 9640681.6933, 438610.9955, 71.0427952, 62.5, 0, 800, -1],
+                [7333.9177, 9640702.7312, 438669.8438, 68.5010733, 119.9321, 800, 800, -1],
+                [7453.8498, 9640754.2365, 438778.0288, 60.14485203, 62.5, 800, 0, -1],
+                [7516.3498, 9640786.6532, 438831.4599, 58.00313013, 148.4393, 0, 0, 0],
+                [7664.7891, 9640865.2949, 438957.3555, 58.00313013, 20.8794, 1000, 1000, 1],
+                [7685.6685, 9640876.171, 438975.1781, 59.12179919, 203.7551, 0, 0, 0],
+                [7889.4236, 9640980.4871, 439150.2046, 59.12179919, 62.5, 0, 800, -1],
+                [7951.9236, 9641013.1792, 439203.4676, 56.58007729, 78.2396, 800, 800, -1],
+                [8030.1632, 9641058.9664, 439266.8718, 51.21481678, 62.5, 800, 0, -1],
+                [8092.6632, 9641099.2453, 439314.656, 49.07309488, 328.2653, 0, 0, 0],
+                [8420.9286, 9641314.0646, 439562.8712, 49.07309488, 21.9231, 1500, 1500, 1],
+                [8442.8516, 9641328.2896, 439579.5524, 49.57455852, 221.9004, 0, 0, 0],
+                [8664.752, 9641471.0352, 439749.445, 49.57455852, 171.5331, 10000, 10000, -1],
+                [8836.2851, 9641582.501, 439879.8223, 48.58474616, 215.1068, 0, 0, 0],
+                [9051.3919, 9641723.6809, 440042.1158, 48.58474616, 13.5991, 1999.9999, 1999.9999, -1],
+                [9064.991, 9641732.6411, 440052.3456, 48.35249564, 374.5047, 0, 0, 0],
+                [9439.4957, 9641980.3532, 440333.2237, 48.35249564, 20.0688, 1000, 1000, 1],
+                [9459.5645, 9641993.4756, 440348.4074, 49.44244367, 133.0273, 0, 0, 0],
+                [9592.5918, 9642079.4452, 440449.9233, 49.44244367, 108.502, 5849.8716, 5849.8716, -1],
+                [9701.0938, 9642150.3291, 440532.0685, 48.40386864, 307.2439, 0, 0, 0],
+                [10008.3377, 9642353.2016, 440762.8099, 48.40386864, 62.5, 0, 1600, 1],
+                [10070.8377, 9642394.163, 440810.0145, 49.47472959, 243.8646, 1600, 1600, 1],
+                [10314.7024, 9642536.8036, 441007.5204, 58.31452284, 62.5, 1600, 0, 1],
+                [10377.2024, 9642568.7352, 441061.2465, 59.38538379, 109.2893, 0, 0, 0],
+                [10486.4917, 9642623.9598, 441155.5566, 59.38538379, 37.2928, 1000, 1000, -1],
+                [10523.7846, 9642643.3998, 441187.3793, 57.30416361, 307.3394, 0, 0, 0],
+                [10831.124, 9642808.4808, 441446.6201, 57.30416361, 11.7613, 1000, 1000, 1],
+                [10842.8853, 9642814.7397, 441456.5777, 58.11075885, 213.8491, 0, 0, 0],
+                [11056.7345, 9642927.4749, 441638.2979, 58.11075885, 66.2994, 6886.5633, 6886.5633, -1],
+                [11123.0338, 9642962.6967, 441694.4673, 57.38018038, 66.4768, 0, 0, 0],
+                [11189.5107, 9642998.2836, 441750.6165, 57.38018038, 54.77, 1000, 1000, 1],
+                [11244.2806, 9643026.3223, 441797.6573, 60.46189229, 125.7863, 0, 0, 0]
+            ]
+        }
+    ]
+};
+
+// ========================================================================
+// 3. 核心逻辑
+// ========================================================================
+let roadList = [], fourParams = null, projectionType = 'utm', currentPos = null, controlLonLat = null;
+let currentRoadIndex = 0;
+let allRoadPoints = [];
+let showStakes = true;
+
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d');
+
+// 变换状态
+let transform = {
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+    minScale: 0.0000001,
+    maxScale: 0.1,
+};
+
+// 手势状态
+let isDragging = false;
+let dragStartX = 0, dragStartY = 0;
+let isPinched = false;
+let startDistance = 0;
+let lastScale = 1;
+let startTouchCenterX = 0, startTouchCenterY = 0;
+let startOffsetX = 0, startOffsetY = 0;
+
+// UI 元素
+const infoBar = document.getElementById('info-bar');
+const locateBtn = document.getElementById('locate-btn');
+const roadSelector = document.getElementById('road-selector');
+const resetAllBtn = document.getElementById('reset-all-btn');
+const toggleStakesBtn = document.getElementById('toggleStakesBtn');
+
+// ---- 辅助函数 ----
+function getProjection() {
+    if (CONFIG.proj && CONFIG.proj.toLowerCase().includes('gao')) return 'gao';
+    return 'utm';
+}
+
+function generateRoadPoints(road) {
+    if (!road.pqx || road.pqx.length < 2) return [];
+    const pts = LL.hua_Dantiaoxianlu(road.pqx, null, null, 20, 0, 0);
+    if (!pts || pts.length === 0) return [];
+    const result = [];
+    for (const pt of pts) {
+        result.push({ x: pt[1], y: pt[2], stake: pt[0], azimuth: pt[3] });
+    }
+    return result;
+}
+
+function planToScreen(px, py) {
+    return {
+        x: py * transform.scale + transform.offsetX,
+        y: -px * transform.scale + transform.offsetY
+    };
+}
+
+// ---- 绘制函数 ----
+function draw() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+    const W = rect.width;
+    const H = rect.height;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, W, H);
+
+    if (!allRoadPoints || allRoadPoints.length === 0) {
+        ctx.fillStyle = '#666';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('加载道路数据...', W/2, H/2);
+        return;
+    }
+
+    const colors = ['#2b7be4', '#e67e22', '#27ae60', '#8e44ad', '#e74c3c', '#1abc9c', '#f1c40f'];
+
+    // 1. 绘制所有道路线条
+    for (let ri = 0; ri < allRoadPoints.length; ri++) {
+        const road = allRoadPoints[ri];
+        const pts = road.points || [];
+        if (pts.length < 2) continue;
+        const isCurrent = (ri === currentRoadIndex);
+        const color = isCurrent ? colors[ri % colors.length] : colors[ri % colors.length] + '88';
+        const lineWidth = isCurrent ? 3 : 1.5;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        let first = true;
+        for (const p of pts) {
+            const screen = planToScreen(p.x, p.y);
+            if (first) { ctx.moveTo(screen.x, screen.y); first = false; }
+            else ctx.lineTo(screen.x, screen.y);
+        }
+        ctx.stroke();
+    }
+
+    // 2. 绘制所有道路名称（平行于路线）
+    const zoomLevel = transform.scale;
+    const showRouteNames = zoomLevel > 0.000003;
+
+    if (showRouteNames) {
+        for (let ri = 0; ri < allRoadPoints.length; ri++) {
+            const road = allRoadPoints[ri];
+            const pts = road.points || [];
+            if (pts.length < 2) continue;
+            const isCurrent = (ri === currentRoadIndex);
+            const mid = Math.floor(pts.length / 2);
+            if (mid < pts.length) {
+                const p = pts[mid];
+                const screen = planToScreen(p.x, p.y);
+                if (screen.x >= -50 && screen.x <= W + 50 && screen.y >= -50 && screen.y <= H + 50) {
+                    const roadName = road.name || '未命名';
+                    const font = isCurrent ? 'bold 14px sans-serif' : '12px sans-serif';
+                    ctx.font = font;
+                    const tw = ctx.measureText(roadName).width;
+                    const pad = 8;
+                    const rx = screen.x - tw/2 - pad;
+                    const ry = screen.y - 14 - pad;
+                    const rw = tw + pad*2;
+                    const rh = 28 + pad*2;
+                    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                    ctx.shadowBlur = 6;
+                    ctx.fillStyle = isCurrent ? 'rgba(0,0,0,0.8)' : 'rgba(0,0,0,0.5)';
+                    ctx.beginPath();
+                    ctx.roundRect(rx, ry, rw, rh, 12);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = isCurrent ? '#fff' : '#ccc';
+                    const az = p.azimuth;
+                    ctx.save();
+                    ctx.translate(screen.x, screen.y);
+                    ctx.rotate(az - Math.PI / 2);
+                    ctx.fillText(roadName, 0, 0);
+                    ctx.restore();
+                }
+            }
+        }
+    }
+
+    // 3. 绘制当前道路的桩号（垂直于路线，不设置对齐属性）
+    if (showStakes) {
+        const currentRoad = allRoadPoints[currentRoadIndex];
+        if (currentRoad) {
+            const pts = currentRoad.points;
+            if (pts.length >= 2) {
+                const scale = transform.scale;
+                // 点列间距为 20 米，期望屏幕间距 60 像素
+                const targetPixel = 60;
+                let step = Math.max(1, Math.round(targetPixel / (20 * scale)));
+                // 完全不设上限，让 step 自由增长，缩小到极端时桩号自动消失
+
+                ctx.font = 'bold 10px sans-serif';
+                ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                ctx.shadowBlur = 4;
+                ctx.fillStyle = '#fff';
+                // 不设置 textAlign 和 textBaseline，使用默认值
+
+                for (let i = 0; i < pts.length; i += step) {
+                    const p = pts[i];
+                    const screen = planToScreen(p.x, p.y);
+                    if (screen.x < -20 || screen.x > W + 20 || screen.y < -20 || screen.y > H + 20) continue;
+                    const stakeStr = LL.hua_Num2K(p.stake);
+                    const az = p.azimuth;
+                    ctx.save();
+                    ctx.translate(screen.x, screen.y);
+                    ctx.rotate(az);
+                    ctx.fillText(stakeStr, 0, 0);
+                    ctx.restore();
+                }
+                ctx.shadowBlur = 0;
+            }
+        }
+    }
+
+    // 4. 当前位置
+    // 4. 当前位置 - 使用五角星
+if (currentPos) {
+    const [x, y] = currentPos;
+    const screen = planToScreen(x, y);
+    ctx.shadowBlur = 0;
+    ctx.font = '28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e74c3c';
+    ctx.fillText('★', screen.x, screen.y);
+}
+}
+
+// roundRect polyfill
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        if (r > w/2) r = w/2;
+        if (r > h/2) r = h/2;
+        this.moveTo(x + r, y);
+        this.lineTo(x + w - r, y);
+        this.quadraticCurveTo(x + w, y, x + w, y + r);
+        this.lineTo(x + w, y + h - r);
+        this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        this.lineTo(x + r, y + h);
+        this.quadraticCurveTo(x, y + h, x, y + h - r);
+        this.lineTo(x, y + r);
+        this.quadraticCurveTo(x, y, x + r, y);
+        return this;
+    };
+}
+
+// ---- 自适应视图 ----
+function fitToRoad(roadPoints) {
+    if (!roadPoints || roadPoints.length === 0) return;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of roadPoints) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const W = rect.width;
+    const H = rect.height;
+    const margin = 40;
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    let newScale = Math.min((W - 2*margin) / rangeY, (H - 2*margin) / rangeX);
+    newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    transform.scale = newScale;
+    transform.offsetX = W/2 - centerY * newScale;
+    transform.offsetY = H/2 + centerX * newScale;
+    draw();
+}
+
+function fitToAllRoads() {
+    let allPoints = [];
+    for (const road of allRoadPoints) {
+        allPoints = allPoints.concat(road.points);
+    }
+    fitToRoad(allPoints);
+}
+
+// ---- 更新道路数据 ----
+function updateRoads() {
+    allRoadPoints = [];
+    roadList.forEach((road, idx) => {
+        const pts = generateRoadPoints(road);
+        allRoadPoints.push({
+            name: road.name,
+            points: pts,
+            isCurrent: (idx === currentRoadIndex)
+        });
+    });
+    draw();
+}
+
+// ---- 切换道路 ----
+function switchRoad(idx) {
+    currentRoadIndex = idx;
+    updateRoads();
+    const road = allRoadPoints[idx];
+    if (road && road.points.length > 0) {
+        fitToRoad(road.points);
+    }
+    if (currentPos) updatePosition(null, null);
+}
+
+// ---- 更新位置信息 ----
+function updatePosition(lon, lat) {
+    if (!fourParams || !currentPos) {
+        infoBar.innerHTML = `<div><span class="status">等待定位...</span></div>`;
+        locateBtn.disabled = true;
+        draw();
+        return;
+    }
+    const road = roadList[currentRoadIndex];
+    if (!road) { infoBar.innerHTML = `<div><span class="status">道路数据未加载</span></div>`; return; }
+    const [x, y] = currentPos;
+    const [k, pj] = LL.hua_Fs(road.pqx, x, y);
+    if (k === -1 || k === -2 || k === -3 || (k === 0 && pj === 0)) {
+        infoBar.innerHTML = `<div><span class="status">⚡ 定位在线路范围外</span></div>`;
+        locateBtn.disabled = false;
+        draw();
+        return;
+    }
+    const azRad = LL.hua_Fwj(road.pqx[0][1], road.pqx[0][2], x, y)[1];
+    const azDms = LL.hua_radiansToDMS_度分秒(azRad);
+    const kStr = LL.hua_Num2K(k);
+    infoBar.innerHTML = `
+        <div>
+            <span class="road-name">${road.name}</span>
+            <span class="stake">${kStr}</span><br>
+            <span class="offset">偏距 ${pj.toFixed(2)}m</span>
+         
+        </div>
+    `;
+    locateBtn.disabled = false;
+    draw();
+}
+
+// ---- 定位到当前位置 ----
+function locateToCurrent() {
+    if (!currentPos) return;
+    const [x, y] = currentPos;
+    const rect = canvas.getBoundingClientRect();
+    const W = rect.width;
+    const H = rect.height;
+    const screen = planToScreen(x, y);
+    transform.offsetX += W/2 - screen.x;
+    transform.offsetY += H/2 - screen.y;
+    draw();
+    infoBar.innerHTML = `<div><span class="status">📍 已定位到当前位置</span></div>`;
+    setTimeout(() => { if (currentPos) updatePosition(null, null); }, 1000);
+}
+
+// ---- 重置全部视图 ----
+function resetAllView() {
+    fitToAllRoads();
+}
+
+// ---- 切换桩号显示 ----
+function toggleStakes() {
+    showStakes = !showStakes;
+    toggleStakesBtn.classList.toggle('active');
+    toggleStakesBtn.textContent = showStakes ? '🔢 桩号' : '🔢 隐藏';
+    draw();
+}
+
+// ---- 数据初始化 ----
+function initFromConfig() {
+    if (!CONFIG.data || !CONFIG.roads || CONFIG.roads.length === 0) {
+        infoBar.innerHTML = `<div><span class="status">❌ 请配置 CONFIG 数据</span></div>`;
+        return false;
+    }
+    projectionType = getProjection();
+    const center = CONFIG.center || 0;
+    controlLonLat = CONFIG.data.map(p => [p.L, p.B]);
+
+    const controlXy = CONFIG.data.map(p => [p.x, p.y]);
+    const srcXy = CONFIG.data.map(p => {
+        let projCoord;
+        if (projectionType === 'gao') {
+            const g = LL.hua_Gauss_proj(p.L, p.B, center);
+            projCoord = [g[0], g[1]];
+        } else {
+            const u = LL.hua_Utm_proj(p.L, p.B);
+            projCoord = [u[0], u[1]];
+        }
+        return projCoord;
+    });
+    const srcFlat = [], tgtFlat = [];
+    CONFIG.data.forEach((p, i) => {
+        srcFlat.push(srcXy[i][0], srcXy[i][1]);
+        tgtFlat.push(p.x, p.y);
+    });
+    const [dx, dy, rot, scale] = LL.hua_Cs4(srcFlat, tgtFlat);
+    fourParams = { dx, dy, rot, scale };
+
+    roadList = CONFIG.roads;
+    roadSelector.innerHTML = '';
+    roadList.forEach((r, idx) => {
+        const opt = document.createElement('option');
+        opt.value = idx;
+        opt.textContent = r.name;
+        roadSelector.appendChild(opt);
+    });
+    roadSelector.value = 0;
+    currentRoadIndex = 0;
+
+    updateRoads();
+    const firstRoad = allRoadPoints[0];
+    if (firstRoad && firstRoad.points.length > 0) {
+        fitToRoad(firstRoad.points);
+    }
+
+    locateBtn.addEventListener('click', locateToCurrent);
+    locateBtn.disabled = true;
+    resetAllBtn.addEventListener('click', resetAllView);
+    roadSelector.addEventListener('change', function() { switchRoad(parseInt(this.value)); });
+    toggleStakesBtn.addEventListener('click', toggleStakes);
+
+    return true;
+}
+
+// ---- GPS 定位 ----
+let watchId = null;
+function startGps() {
+    if (!navigator.geolocation) {
+        infoBar.innerHTML = `<div><span class="status">❌ 浏览器不支持GPS</span></div>`;
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const lon = pos.coords.longitude;
+            const lat = pos.coords.latitude;
+            const center = CONFIG.center || 0;
+            let projCoord;
+            if (projectionType === 'gao') {
+                const g = LL.hua_Gauss_proj(lon, lat, center);
+                projCoord = [g[0], g[1]];
+            } else {
+                const u = LL.hua_Utm_proj(lon, lat);
+                projCoord = [u[0], u[1]];
+            }
+            const [northing, easting] = projCoord;
+            const [x, y] = LL.hua_FourParameterTransform(northing, easting,
+                fourParams.dx, fourParams.dy, fourParams.rot, fourParams.scale);
+            currentPos = [x, y];
+            updatePosition(lon, lat);
+            locateBtn.disabled = false;
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            watchId = navigator.geolocation.watchPosition(
+                (pos2) => {
+                    const lon2 = pos2.coords.longitude;
+                    const lat2 = pos2.coords.latitude;
+                    let projCoord2;
+                    if (projectionType === 'gao') {
+                        const g2 = LL.hua_Gauss_proj(lon2, lat2, center);
+                        projCoord2 = [g2[0], g2[1]];
+                    } else {
+                        const u2 = LL.hua_Utm_proj(lon2, lat2);
+                        projCoord2 = [u2[0], u2[1]];
+                    }
+                    const [northing2, easting2] = projCoord2;
+                    const [x2, y2] = LL.hua_FourParameterTransform(northing2, easting2,
+                        fourParams.dx, fourParams.dy, fourParams.rot, fourParams.scale);
+                    currentPos = [x2, y2];
+                    updatePosition(lon2, lat2);
+                    locateBtn.disabled = false;
+                },
+                (err) => {},
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+            );
+        },
+        (err) => {
+            infoBar.innerHTML = `<div><span class="status">⚠️ 定位失败: ${err.message}</span></div>`;
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+}
+
+// ---- 手势处理 ----
+canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+        isDragging = true;
+        isPinched = false;
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        dragStartX = touch.clientX - rect.left - transform.offsetX;
+        dragStartY = touch.clientY - rect.top - transform.offsetY;
+    } else if (e.touches.length === 2) {
+        isDragging = false;
+        isPinched = true;
+        const rect = canvas.getBoundingClientRect();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        startDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        startTouchCenterX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        startTouchCenterY = (t1.clientY + t2.clientY) / 2 - rect.top;
+        lastScale = transform.scale;
+        startOffsetX = transform.offsetX;
+        startOffsetY = transform.offsetY;
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (isDragging && e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const clientX = touch.clientX - rect.left;
+        const clientY = touch.clientY - rect.top;
+        transform.offsetX = clientX - dragStartX;
+        transform.offsetY = clientY - dragStartY;
+        draw();
+    } else if (isPinched && e.touches.length === 2) {
+        const rect = canvas.getBoundingClientRect();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const currentDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        if (startDistance > 0) {
+            const currentCenterX = (t1.clientX + t2.clientX) / 2 - rect.left;
+            const currentCenterY = (t1.clientY + t2.clientY) / 2 - rect.top;
+            const factor = currentDistance / startDistance;
+            let newScale = lastScale * factor;
+            newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+            const ratio = newScale / lastScale;
+            transform.offsetX = currentCenterX - (startTouchCenterX - startOffsetX) * ratio;
+            transform.offsetY = currentCenterY - (startTouchCenterY - startOffsetY) * ratio;
+            transform.scale = newScale;
+            draw();
+        }
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    if (e.touches.length === 0) {
+        isDragging = false;
+        isPinched = false;
+    } else if (e.touches.length === 1) {
+        isDragging = true;
+        isPinched = false;
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        dragStartX = touch.clientX - rect.left - transform.offsetX;
+        dragStartY = touch.clientY - rect.top - transform.offsetY;
+    }
+});
+
+// ---- 鼠标事件 ----
+canvas.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    const rect = canvas.getBoundingClientRect();
+    dragStartX = e.clientX - rect.left - transform.offsetX;
+    dragStartY = e.clientY - rect.top - transform.offsetY;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    transform.offsetX = e.clientX - rect.left - dragStartX;
+    transform.offsetY = e.clientY - rect.top - dragStartY;
+    draw();
+});
+
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const delta = e.deltaY > 0 ? -0.05 : 0.05;
+    const oldScale = transform.scale;
+    let newScale = oldScale * (1 + delta);
+    newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+    const ratio = newScale / oldScale;
+    transform.offsetX = cx - (cx - transform.offsetX) * ratio;
+    transform.offsetY = cy - (cy - transform.offsetY) * ratio;
+    transform.scale = newScale;
+    draw();
+}, { passive: false });
+
+// ---- 启动 ----
+window.addEventListener('load', function() {
+    if (initFromConfig()) {
+        startGps();
+    }
+});
+</script>
+</body>
+</html>
