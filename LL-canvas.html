@@ -830,7 +830,7 @@ function getProjection() {
 }
 
 function generateRoadPoints(road) {
-    if (!road.pqx || road.pqx.length < 2) return [];
+    if (!road.pqx || road.pqx.length < 1) return [];
     const pts = LL.hua_Dantiaoxianlu(road.pqx, null, null, 20, 0, 0);
     if (!pts || pts.length === 0) return [];
     const result = [];
