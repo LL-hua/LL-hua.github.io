@@ -1,0 +1,1999 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>道路桩号 · 纯平面坐标</title>
+    <style>
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+body { font-family: 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; overflow: hidden; height: 100vh; }
+#canvasWrapper { position: relative; width: 100vw; height: 100vh; background: #1a1a2e; touch-action: none; overflow: hidden; }
+#mainCanvas { display: block; width: 100%; height: 100%; background: #1a1a2e; touch-action: none; }
+
+/* 顶部信息栏 (absolute 不变) */
+#info-bar {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.75); backdrop-filter: blur(8px); color: #fff;
+    padding: 8px 16px; border-radius: 10px; z-index: 10; text-align: center;
+    font-size: 0.9rem; line-height: 1.4; pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.1); min-width: 180px;
+}
+#info-bar .road-name { font-weight: bold; color: #4fc3f7; }
+#info-bar .stake { font-size: 1.1rem; font-weight: 600; color: #fff; }
+#info-bar .offset { color: #aed581; }
+#info-bar .azimuth { color: #ffb74d; }
+#info-bar .status { color: #ef9a9a; }
+
+/* 左上角按钮组 (absolute 不变) */
+.top-left-buttons {
+    position: absolute; top: 12px; left: 12px; z-index: 10;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.top-left-buttons button {
+    background: rgba(255,255,255,0.9); border: none; border-radius: 8px;
+    padding: 6px 12px; font-size: 0.8rem; font-weight: 600; color: #1a3c5e;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; transition: 0.2s;
+    backdrop-filter: blur(4px); display: flex; align-items: center; gap: 4px;
+}
+.top-left-buttons button:hover { background: #fff; transform: scale(1.05); }
+.top-left-buttons button.active { background: #2b7be4; color: #fff; }
+
+/* 右上角道路选择 (absolute 不变) */
+#road-selector {
+    position: absolute; top: 12px; right: 12px; z-index: 10;
+    background: rgba(255,255,255,0.95); border: none; border-radius: 8px;
+    padding: 6px 12px; font-size: 0.9rem; font-weight: 600; color: #1a3c5e;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; outline: none;
+    max-width: 160px;
+}
+
+/* ★ 底部按钮改为 fixed 定位，保证始终可见 ★ */
+#locate-btn, #reset-all-btn {
+    position: fixed;
+    background: rgba(255,255,255,0.9);
+    border: none;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    font-size: 1.4rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    cursor: pointer;
+    z-index: 1000; /* 确保在最顶层 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.2s;
+    padding: 0;
+    line-height: 1;
+    backdrop-filter: blur(4px);
+}
+#locate-btn:hover, #reset-all-btn:hover { background: #fff; transform: scale(1.05); }
+#locate-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+#locate-btn { bottom: 24px; left: 16px; }
+#reset-all-btn { bottom: 24px; right: 16px; }
+
+/* 移动端适配 */
+@media (max-width: 600px) {
+    #info-bar { top: 8px; padding: 6px 12px; font-size: 0.75rem; min-width: 120px; }
+    #road-selector { top: 8px; right: 8px; padding: 4px 8px; font-size: 0.8rem; max-width: 120px; }
+    .top-left-buttons { top: 8px; left: 8px; }
+    .top-left-buttons button { padding: 4px 8px; font-size: 0.7rem; }
+    #locate-btn, #reset-all-btn { width: 38px; height: 38px; font-size: 1.2rem; }
+    #locate-btn { bottom: 16px; left: 12px; }
+    #reset-all-btn { bottom: 16px; right: 12px; }
+}
+    </style>
+</head>
+<body>
+<div id="canvasWrapper">
+    <canvas id="mainCanvas"></canvas>
+    <div class="top-left-buttons">
+        <button id="toggleStakesBtn" class="active">🔢 桩号</button>
+    </div>
+    <div id="info-bar"><div><span class="status">等待定位...</span></div></div>
+    <select id="road-selector"></select>
+    <button id="locate-btn" disabled>📍</button>
+    <button id="reset-all-btn">⟲</button>
+</div>
+
+<script>
+// ========================================================================
+// 1. 您的完整 LL 工具库（请在此粘贴）
+// ========================================================================
+const LL = {
+    // ---------- 基础工具 ----------
+    hua_getKBZ(x1, y1, x2, y2, points) {
+        if (!points) throw new Error('points is null');
+        const rows = points.length;
+        if (rows === 0 || points[0].length < 3) throw new Error('输入点集必须至少包含 X, Y, Z 三列');
+        const dx = x2 - x1, dy = y2 - y1;
+        const len2 = dx * dx + dy * dy;
+        if (len2 === 0) throw new Error('直线两点重合');
+        const len = Math.sqrt(len2);
+        const a = y1 - y2, b = x2 - x1, c = x1 * y2 - x2 * y1;
+        const result = new Array(rows);
+        for (let i = 0; i < rows; i++) {
+            const x0 = points[i][0], y0 = points[i][1], z = points[i][2];
+            const dot = (x0 - x1) * dx + (y0 - y1) * dy;
+            const signedDistToFoot = dot / len;
+            const signedVerticalDist = (a * x0 + b * y0 + c) / len;
+            result[i] = [signedDistToFoot, signedVerticalDist, z];
+        }
+        return result;
+    },
+    hua_Num2K(meters) {
+        const km = Math.floor(meters / 1000);
+        let m = Math.round((meters - km*1000) * 100) / 100;
+        if (Number.isInteger(m)) return `K${km}+${String(m).padStart(3,'0')}`;
+        else return `K${km}+${m.toFixed(2).padStart(6,'0')}`;
+    },
+    hua_DmsToRadians(dms) {
+        const deg = Math.floor(dms);
+        const frac = dms - deg;
+        const min = Math.floor(frac * 100);
+        const sec = (frac * 100 - min) * 100;
+        return (deg + min/60 + sec/3600) * Math.PI / 180;
+    },
+    hua_radiansToDMS_度分秒(rad) {
+        let deg = rad * 180 / Math.PI;
+        const d = Math.floor(deg);
+        let rem = (deg - d) * 60;
+        const m = Math.floor(rem);
+        const s = (rem - m) * 60;
+        return `${d}°${String(m).padStart(2,'0')}′${String(Math.round(s*10)/10).padStart(4,'0')}″`;
+    },
+    hua_Fwj(x0, y0, x1, y1) {
+        const x = x1 - x0, y = y1 - y0;
+        const cd = Math.sqrt(x * x + y * y);
+        let hd = Math.atan2(y, x);
+        if (hd < 0) hd += 2 * Math.PI;
+        return [cd, hd];
+    },
+    // ---------- 线路计算 ----------
+    hua_Zs(xyk, xyx, xyy, xyhd, xycd, xyqdr, xyzdr, xyzy, jsk, jsb, jd) {
+        jd = this.hua_DmsToRadians(jd);
+        if (Math.abs(xyqdr - xyzdr) < 0.01 && xyqdr > 0) {
+            const cx = xyx + xyqdr*Math.cos(xyhd + xyzy*Math.PI/2);
+            const cy = xyy + xyqdr*Math.sin(xyhd + xyzy*Math.PI/2);
+            const da = (jsk - xyk) / xyqdr * xyzy;
+            let az = xyhd + da;
+            if (az < 0) az += 2*Math.PI;
+            const ang = xyhd + xyzy*Math.PI/2 + da;
+            return [cx - xyqdr*Math.cos(ang) + jsb*Math.cos(ang - xyzy*Math.PI/2 + jd),
+                    cy - xyqdr*Math.sin(ang) + jsb*Math.sin(ang - xyzy*Math.PI/2 + jd), az];
+        }
+        if (xyqdr < 0.01 && xyzdr < 0.01 && xyzy < 0.01) {
+            return [xyx + (jsk-xyk)*Math.cos(xyhd) + jsb*Math.cos(xyhd+jd),
+                    xyy + (jsk-xyk)*Math.sin(xyhd) + jsb*Math.sin(xyhd+jd), xyhd];
+        }
+        let r1 = xyqdr<0.001?99999999:xyqdr, r2=xyzdr<0.001?99999999:xyzdr;
+        const f0=xyhd, q=xyzy, c=1/r1, d=(r1-r2)/(2*xycd*r1*r2);
+        const rr=[0,0.1739274226,0.3260725774,0.3260725774,0.1739274226];
+        const vv=[0,0.0694318442,0.3300094782,1-0.3300094782,1-0.0694318442];
+        const w=jsk-xyk;
+        let xs=0, ys=0;
+        for(let i=1;i<5;i++){
+            const ff = f0 + q*vv[i]*w*(c + vv[i]*w*d);
+            xs += rr[i]*Math.cos(ff);
+            ys += rr[i]*Math.sin(ff);
+        }
+        let fhz3 = f0 + q*w*(c + w*d);
+        if(fhz3<0) fhz3+=2*Math.PI;
+        if(fhz3>=2*Math.PI) fhz3-=2*Math.PI;
+        return [xyx + w*xs + jsb*Math.cos(fhz3+jd),
+                xyy + w*ys + jsb*Math.sin(fhz3+jd), fhz3];
+    },
+    hua_Dantiaoxianludange(pqx, k, b, z) {
+        for(let i=0;i<pqx.length;i++){
+            const [dtk,dtx,dty,dtfwj,dtcd,dtr1,dtr2,dtzy] = pqx[i];
+            if(k>=dtk && k<=dtk+dtcd){
+                const hudu = this.hua_DmsToRadians(dtfwj);
+                const js = this.hua_Zs(dtk,dtx,dty,hudu,dtcd,dtr1,dtr2,dtzy,k,b,z);
+                return [Math.round(js[0]*1000)/1000, Math.round(js[1]*1000)/1000, js[2]];
+            }
+        }
+        return [0,0,0];
+    },
+    hua_Fs(pqx, fsx, fsy) {
+        let jljd = this.hua_Fwj(pqx[0][1], pqx[0][2], fsx, fsy);
+        let k = pqx[0][0];
+        const hudu = this.hua_DmsToRadians(pqx[0][3]);
+        let cz = jljd[0]*Math.cos(jljd[1]-hudu);
+        let pj = jljd[0]*Math.sin(jljd[1]-hudu);
+        const qdlc = pqx[0][0];
+        const zdlc = pqx[pqx.length-1][0] + pqx[pqx.length-1][4];
+        let iter=0;
+        while(Math.abs(cz) > 0.01) {
+            k += cz;
+            iter++;
+            if(k<qdlc) return [-1,-1];
+            if(k>zdlc) return [-2,-2];
+            if(iter>15) return [-3,-3];
+            const xy = this.hua_Dantiaoxianludange(pqx, k, 0, 0);
+            jljd = this.hua_Fwj(xy[0], xy[1], fsx, fsy);
+            cz = jljd[0]*Math.cos(jljd[1]-xy[2]);
+            pj = jljd[0]*Math.sin(jljd[1]-xy[2]);
+        }
+        return [Math.round(k*1000)/1000, Math.round(pj*1000)/1000];
+    },
+    // ---------- 新增：快速生成线路点列 ----------
+    hua_Dantiaoxianlu(pqx, startK, endK, step, b, z) {
+        if (!pqx || pqx.length === 0) return null;
+        const rowCount = pqx.length;
+        const realStart = (startK !== undefined && startK !== null) ? startK : pqx[0][0];
+        const realEnd = (endK !== undefined && endK !== null) ? endK : (pqx[rowCount-1][0] + pqx[rowCount-1][4]);
+        if (realStart > realEnd || step <= 0) return null;
+        const kList = [];
+        kList.push(realStart);
+        const firstMultiple = Math.ceil(realStart / step) * step;
+        if (Math.abs(firstMultiple - realStart) > 1e-9) kList.push(firstMultiple);
+        for (let k = firstMultiple + step; k <= realEnd - 1e-9; k += step) kList.push(k);
+        if (Math.abs(kList[kList.length-1] - realEnd) > 1e-9) kList.push(realEnd);
+
+        const points = [];
+        let pointIdx = 0;
+        const totalPoints = kList.length;
+        const bVal = (b !== undefined && b !== null) ? b : 0;
+        const zVal = (z !== undefined && z !== null) ? z : 0;
+
+        for (let i = 0; i < rowCount && pointIdx < totalPoints; i++) {
+            const segStart = pqx[i][0];
+            const segEnd = segStart + pqx[i][4];
+            const startX = pqx[i][1];
+            const startY = pqx[i][2];
+            const azimuthRad = this.hua_DmsToRadians(pqx[i][3]);
+            const length = pqx[i][4];
+            const r1 = pqx[i][5];
+            const r2 = pqx[i][6];
+            const turn = pqx[i][7];
+            while (pointIdx < totalPoints && kList[pointIdx] <= segEnd + 1e-9) {
+                const currentK = kList[pointIdx];
+                if (currentK < segStart - 1e-9) { pointIdx++; continue; }
+                const result = this.hua_Zs(segStart, startX, startY, azimuthRad, length, r1, r2, turn, currentK, bVal, zVal);
+                points.push([currentK, result[0], result[1], result[2]]);
+                pointIdx++;
+            }
+        }
+        const count = points.length;
+        const matrix = new Array(count);
+        for (let i = 0; i < count; i++) {
+            matrix[i] = [points[i][0], points[i][1], points[i][2], points[i][3]];
+        }
+        return matrix;
+    },
+    // ---------- 高斯投影 ----------
+    hua_Gauss_proj(L, B, lonCenter) {
+        if (lonCenter === undefined) lonCenter = 360.0;
+        const pi = Math.PI;
+        const p0 = 206264.8062470963551564;
+        const e = 0.00669438002290;
+        const e1 = 0.00673949677548;
+        const b = 6356752.3141;
+        const a = 6378137.0;
+        B = B * pi / 180;
+        L = L * pi / 180;
+        let L_num, L_center;
+        if (lonCenter >= 359) {
+            L_num = Math.floor(L * 180 / pi / 3.0 + 0.5);
+            L_center = 3 * L_num;
+        } else {
+            L_center = lonCenter;
+        }
+        const l = (L / pi * 180 - L_center) * 3600;
+        const M0 = a * (1 - e);
+        const M2 = 3.0 / 2.0 * e * M0;
+        const M4 = 5.0 / 4.0 * e * M2;
+        const M6 = 7.0 / 6.0 * e * M4;
+        const M8 = 9.0 / 8.0 * e * M6;
+        const a0 = M0 + M2 / 2.0 + 3.0 / 8.0 * M4 + 5.0 / 16.0 * M6 + 35.0 / 128.0 * M8;
+        const a2 = M2 / 2.0 + M4 / 2 + 15.0 / 32.0 * M6 + 7.0 / 16.0 * M8;
+        const a4 = M4 / 8.0 + 3.0 / 16.0 * M6 + 7.0 / 32.0 * M8;
+        const a6 = M6 / 32.0 + M8 / 16.0;
+        const a8 = M8 / 128.0;
+        const Xz = a0 * B - a2 / 2.0 * Math.sin(2 * B) + a4 / 4.0 * Math.sin(4 * B) - a6 / 6.0 * Math.sin(6 * B) + a8 / 8.0 * Math.sin(8 * B);
+        const c = a * a / b;
+        const V = Math.sqrt(1 + e1 * Math.cos(B) * Math.cos(B));
+        const N = c / V;
+        const t = Math.tan(B);
+        const n = e1 * Math.cos(B) * Math.cos(B);
+        const m1 = N * Math.cos(B);
+        const m2 = N / 2.0 * Math.sin(B) * Math.cos(B);
+        const m3 = N / 6.0 * Math.pow(Math.cos(B), 3) * (1 - t * t + n);
+        const m4 = N / 24.0 * Math.sin(B) * Math.pow(Math.cos(B), 3) * (5 - t * t + 9 * n);
+        const m5 = N / 120.0 * Math.pow(Math.cos(B), 5) * (5 - 18 * t * t + Math.pow(t, 4) + 14 * n - 58 * n * t * t);
+        const m6 = N / 720.0 * Math.sin(B) * Math.pow(Math.cos(B), 5) * (61 - 58 * t * t + Math.pow(t, 4));
+        const x = Xz + m2 * l * l / Math.pow(p0, 2) + m4 * Math.pow(l, 4) / Math.pow(p0, 4) + m6 * Math.pow(l, 6) / Math.pow(p0, 6);
+        const y0 = m1 * l / p0 + m3 * Math.pow(l, 3) / Math.pow(p0, 3) + m5 * Math.pow(l, 5) / Math.pow(p0, 5);
+        const y = y0 + 500000;
+        return [x, y, L_center];
+    },
+    hua_Gauss_unproj(x, y, l0) {
+        const pi = Math.PI;
+        const e = 0.00669438002290;
+        const e1 = 0.00673949677548;
+        const b = 6356752.3141;
+        const a = 6378137.0;
+        const y1 = y - 500000;
+        const M0 = a * (1 - e);
+        const M2 = 3.0 / 2.0 * e * M0;
+        const M4 = 5.0 / 4.0 * e * M2;
+        const M6 = 7.0 / 6.0 * e * M4;
+        const M8 = 9.0 / 8.0 * e * M6;
+        const a0 = M0 + M2 / 2.0 + 3.0 / 8.0 * M4 + 5.0 / 16.0 * M6 + 35.0 / 128.0 * M8;
+        const a2 = M2 / 2.0 + M4 / 2 + 15.0 / 32.0 * M6 + 7.0 / 16.0 * M8;
+        const a4 = M4 / 8.0 + 3.0 / 16.0 * M6 + 7.0 / 32.0 * M8;
+        const a6 = M6 / 32.0 + M8 / 16.0;
+        let Bf = x / a0;
+        let B0 = Bf;
+        while (Math.abs(Bf - B0) > 0.0000001 || B0 === Bf) {
+            B0 = Bf;
+            const FBf = -a2 / 2.0 * Math.sin(2 * B0) + a4 / 4.0 * Math.sin(4 * B0) - a6 / 6.0 * Math.sin(6 * B0);
+            Bf = (x - FBf) / a0;
+        }
+        const t = Math.tan(Bf);
+        const c = a * a / b;
+        const V = Math.sqrt(1 + e1 * Math.cos(Bf) * Math.cos(Bf));
+        const N = c / V;
+        const M = c / Math.pow(V, 3);
+        const n = e1 * Math.cos(Bf) * Math.cos(Bf);
+        const n1 = 1 / (N * Math.cos(Bf));
+        const n2 = -t / (2.0 * M * N);
+        const n3 = -(1 + 2 * t * t + n) / (6.0 * Math.pow(N, 3) * Math.cos(Bf));
+        const n4 = t * (5 + 3 * t * t + n - 9 * n * t * t) / (24.0 * M * Math.pow(N, 3));
+        const n5 = (5 + 28 * t * t + 24 * Math.pow(t, 4) + 6 * n + 8 * n * t * t) / (120.0 * Math.pow(N, 5) * Math.cos(Bf));
+        const n6 = -t * (61 + 90 * t * t + 45 * Math.pow(t, 4)) / (720.0 * M * Math.pow(N, 5));
+        const B = (Bf + n2 * y1 * y1 + n4 * Math.pow(y1, 4) + n6 * Math.pow(y1, 6)) / pi * 180;
+        const l = n1 * y1 + n3 * Math.pow(y1, 3) + n5 * Math.pow(y1, 5);
+        const L = l0 + l / pi * 180;
+        return [L, B];
+    },
+    // ---------- UTM ----------
+    hua_Utm_proj(lon, lat) {
+        const a = 6378137, f = 1/298.257223563;
+        const e2 = 2*f - f*f, e2p = e2/(1-e2);
+        const k0 = 0.9996, FE = 500000, FN = 10000000;
+        const zone = Math.floor((lon+180)/6) + 1;
+        const cm = (zone-1)*6 - 180 + 3;
+        const latRad = lat*Math.PI/180, lonRad = lon*Math.PI/180, cmRad = cm*Math.PI/180;
+        const N = a / Math.sqrt(1 - e2*Math.sin(latRad)**2);
+        const T = Math.tan(latRad)**2;
+        const C = e2p * Math.cos(latRad)**2;
+        const A = (lonRad - cmRad) * Math.cos(latRad);
+        const M = a * ((1 - e2/4 - 3*e2**2/64 - 5*e2**3/256)*latRad
+            - (3*e2/8 + 3*e2**2/32 + 45*e2**3/1024)*Math.sin(2*latRad)
+            + (15*e2**2/256 + 45*e2**3/1024)*Math.sin(4*latRad)
+            - (35*e2**3/3072)*Math.sin(6*latRad));
+        const easting = k0 * N * (A + (1-T+C)*A**3/6 + (5-18*T+T**2+72*C-58*e2p)*A**5/120) + FE;
+        let northing = k0 * (M + N*Math.tan(latRad)*(A**2/2 + (5-T+9*C+4*C**2)*A**4/24 + (61-58*T+T**2+600*C-330*e2p)*A**6/720));
+        if (lat < 0) northing += FN;
+        return [northing, easting, zone];
+    },
+    hua_Utm_unproj(northing, easting, isNorthern, zoneNumber) {
+        const a = 6378137, f = 1/298.257223563;
+        const e2 = 2*f - f*f, e2p = e2/(1-e2);
+        const k0 = 0.9996, FE = 500000, FN = 10000000;
+        const x = easting - FE;
+        const y = isNorthern ? northing : northing - FN;
+        const cm = (zoneNumber-1)*6 - 180 + 3;
+        const lonCenterRad = cm * Math.PI / 180;
+        const M = y / k0;
+        const mu = M / (a * (1 - e2/4 - 3*e2**2/64 - 5*e2**3/256));
+        const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+        const phi1Rad = mu + (3*e1/2 - 27*e1**3/32)*Math.sin(2*mu) + (21*e1**2/16 - 55*e1**4/32)*Math.sin(4*mu) + (151*e1**3/96)*Math.sin(6*mu);
+        const N1 = a / Math.sqrt(1 - e2*Math.sin(phi1Rad)**2);
+        const T1 = Math.tan(phi1Rad)**2;
+        const C1 = e2p * Math.cos(phi1Rad)**2;
+        const R1 = a * (1 - e2) / (1 - e2*Math.sin(phi1Rad)**2)**1.5;
+        const D = x / (N1 * k0);
+        const latRad = phi1Rad - (N1*Math.tan(phi1Rad)/R1)*(D**2/2 - (5+3*T1+10*C1-4*C1**2-9*e2p)*D**4/24 + (61+90*T1+298*C1+45*T1**2-252*e2p-3*C1**2)*D**6/720);
+        const lonRad = lonCenterRad + (D - (1+2*T1+C1)*D**3/6 + (5-2*C1+28*T1-3*C1**2+8*e2p+24*T1**2)*D**5/120) / Math.cos(phi1Rad);
+        return [lonRad * 180 / Math.PI, latRad * 180 / Math.PI];
+    },
+    utm_zone(lon) {
+        return Math.floor((lon+180)/6) + 1;
+    },
+    // ---------- 四参数 ----------
+    hua_Cs4(source, target) {
+        if (!source || !target || source.length !== target.length) return [0,0,0,1];
+        if (source.length < 4 || source.length % 2 !== 0) return [0,0,0,1];
+        const pointCount = source.length / 2;
+        let sumX1 = 0, sumY1 = 0, sumX2 = 0, sumY2 = 0;
+        for (let i = 0; i < pointCount; i++) {
+            sumX1 += source[2*i];
+            sumY1 += source[2*i+1];
+            sumX2 += target[2*i];
+            sumY2 += target[2*i+1];
+        }
+        const meanX1 = sumX1 / pointCount, meanY1 = sumY1 / pointCount;
+        const meanX2 = sumX2 / pointCount, meanY2 = sumY2 / pointCount;
+        const centeredSource = new Array(source.length);
+        const centeredTarget = new Array(target.length);
+        for (let i = 0; i < pointCount; i++) {
+            centeredSource[2*i] = source[2*i] - meanX1;
+            centeredSource[2*i+1] = source[2*i+1] - meanY1;
+            centeredTarget[2*i] = target[2*i] - meanX2;
+            centeredTarget[2*i+1] = target[2*i+1] - meanY2;
+        }
+        let H11 = 0, H12 = 0, H21 = 0, H22 = 0;
+        let B1 = 0, B2 = 0;
+        for (let i = 0; i < pointCount; i++) {
+            const x1 = centeredSource[2*i], y1 = centeredSource[2*i+1];
+            const x2 = centeredTarget[2*i], y2 = centeredTarget[2*i+1];
+            H11 += x1*x1 + y1*y1;
+            H22 += x1*x1 + y1*y1;
+            B1 += x1*x2 + y1*y2;
+            B2 += x1*y2 - y1*x2;
+        }
+        const det = H11*H22 - H12*H21;
+        if (Math.abs(det) < 1e-15) return [0,0,0,1];
+        const a = (H22*B1 - H12*B2) / det;
+        const b = (-H21*B1 + H11*B2) / det;
+        const scale = Math.sqrt(a*a + b*b);
+        const rotation = Math.atan2(b, a);
+        const deltaX = meanX2 - (a*meanX1 - b*meanY1);
+        const deltaY = meanY2 - (b*meanX1 + a*meanY1);
+        return [deltaX, deltaY, rotation, scale];
+    },
+    hua_FourParameterTransform(x, y, dx, dy, rot, scale) {
+        return [scale*(x*Math.cos(rot)-y*Math.sin(rot))+dx, scale*(x*Math.sin(rot)+y*Math.cos(rot))+dy];
+    },
+    // ---------- 批量转换 ----------
+    mapGps2XyBatch(lonlatPoints, proj, controlLonLat, controlXy, center) {
+        // 省略，保留占位（实际未使用）
+        return lonlatPoints.map(() => [0,0]);
+    },
+    mapXy2GpsBatch(xyPoints, proj, controlLonLat, controlXy) {
+        return xyPoints.map(() => [0,0]);
+    },
+    // ---------- 填挖方 & 偏移（占位） ----------
+    hua_CutAndFillArea(dmx, sjx, extendDist) { return [0,0,0,0,0,0,0]; },
+    hua_OffsetPolyline(points, offset) { return points; }
+};
+// ========================================================================
+// 2. 数据配置（请在此粘贴您的 CONFIG 对象）
+// ========================================================================
+const CONFIG ={
+tile:"广州南沙区",
+  "proj": "gaosi",
+  "center": 113,
+  "data": [
+    {
+      "x": 190357.814,
+      "y": 63064.717,
+      "B": 22.778100902778,
+      "L": 113.508157888889
+    },
+    {
+      "x": 189831.214,
+      "y": 61535.474,
+      "B": 22.773365038889,
+      "L": 113.493259136111
+    }
+  ],
+  "roads": [
+    {
+      "name": "江灵南",
+      "pqx": [
+        [
+          0,
+          189120.48,
+          61644.466,
+          90.3853,
+          64.232,
+          0,
+          0,
+          0
+        ],
+        [
+          64.232,
+          189119.754,
+          61708.694,
+          90.3853,
+          157.529,
+          2000,
+          2000,
+          -1
+        ],
+        [
+          221.761,
+          189124.174,
+          61866.12,
+          86.0806,
+          177.669,
+          1800,
+          1800,
+          1
+        ],
+        [
+          399.43,
+          189127.389,
+          62043.688,
+          91.4726,
+          281.862,
+          0,
+          0,
+          0
+        ],
+        [
+          681.292,
+          189118.583,
+          62325.412,
+          91.4726,
+          160.632,
+          2500,
+          2500,
+          1
+        ],
+        [
+          841.924,
+          189108.412,
+          62485.694,
+          95.2819,
+          215.013,
+          1500,
+          1500,
+          -1
+        ],
+        [
+          1056.937,
+          189103.294,
+          62700.462,
+          87.1532,
+          150.664,
+          2500,
+          2500,
+          1
+        ],
+        [
+          1207.601,
+          189105.962,
+          62851.08,
+          90.4243,
+          1654.461,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "江灵北",
+      "pqx": [
+        [
+          0,
+          190698.594,
+          61795.886,
+          121.544,
+          40.018,
+          0,
+          0,
+          0
+        ],
+        [
+          40.018,
+          190677.44,
+          61829.856,
+          121.544,
+          83.668,
+          3500,
+          3500,
+          -1
+        ],
+        [
+          123.686,
+          190634.066,
+          61901.401,
+          120.3229,
+          83.668,
+          3500,
+          3500,
+          1
+        ],
+        [
+          207.354,
+          190590.692,
+          61972.946,
+          121.544,
+          285.735,
+          0,
+          0,
+          0
+        ],
+        [
+          493.089,
+          190439.652,
+          62215.498,
+          121.544,
+          355.459,
+          2000,
+          2000,
+          -1
+        ],
+        [
+          848.548,
+          190279.486,
+          62532.303,
+          111.4341,
+          564.151,
+          0,
+          0,
+          0
+        ],
+        [
+          1412.699,
+          190070.638,
+          63056.373,
+          111.4341,
+          251.737,
+          2000,
+          2000,
+          1
+        ],
+        [
+          1664.436,
+          189962.993,
+          63283.75,
+          118.5623,
+          1442.275,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "沙嘴",
+      "pqx": [
+        [
+          0,
+          190235.106,
+          61668.2,
+          119.08,
+          851.447,
+          0,
+          0,
+          0
+        ],
+        [
+          851.447,
+          189820.584,
+          62411.93,
+          119.08,
+          50,
+          0,
+          600,
+          -1
+        ],
+        [
+          901.447,
+          189796.853,
+          62455.935,
+          116.4446,
+          146.391,
+          600,
+          600,
+          -1
+        ],
+        [
+          1047.838,
+          189747.492,
+          62593.367,
+          102.46,
+          50,
+          600,
+          0,
+          -1
+        ],
+        [
+          1097.838,
+          189737.803,
+          62642.416,
+          100.2246,
+          114.239,
+          0,
+          0,
+          0
+        ],
+        [
+          1212.077,
+          189717.221,
+          62754.785,
+          100.2246,
+          108.017,
+          1000,
+          1000,
+          1
+        ],
+        [
+          1320.094,
+          189692.065,
+          62859.778,
+          106.3406,
+          470.237,
+          0,
+          0,
+          0
+        ],
+        [
+          1790.331,
+          189557.973,
+          63310.491,
+          106.3406,
+          50,
+          0,
+          600,
+          -1
+        ],
+        [
+          1840.331,
+          189544.383,
+          63358.605,
+          104.1052,
+          122.44,
+          600,
+          600,
+          -1
+        ],
+        [
+          1962.771,
+          189526.665,
+          63479.541,
+          92.292,
+          50,
+          600,
+          0,
+          -1
+        ],
+        [
+          2012.771,
+          189525.882,
+          63529.532,
+          90.0605,
+          332.542,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "屯田",
+      "pqx": [
+        [
+          0,
+          189093.405,
+          63861.308,
+          0.0606,
+          549.702,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "久远西",
+      "pqx": [
+        [
+          0,
+          189902.916,
+          61384.356,
+          26.1628,
+          438.84,
+          5545.5,
+          5545.5,
+          1
+        ],
+        [
+          438.84,
+          190288.324,
+          61593.977,
+          30.4831,
+          455.079,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "久远东",
+      "pqx": [
+        [
+          0,
+          189862.127,
+          61465.705,
+          26.1606,
+          432.204,
+          5454.5,
+          5454.5,
+          1
+        ],
+        [
+          432.204,
+          190241.718,
+          61672.135,
+          30.483,
+          461.715,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "庙南",
+      "pqx": [
+        [
+          0,
+          189128.164,
+          61983.605,
+          1.4726,
+          312.527,
+          0,
+          0,
+          0
+        ],
+        [
+          312.527,
+          189440.538,
+          61993.37,
+          1.4726,
+          345.986,
+          725,
+          725,
+          1
+        ],
+        [
+          658.513,
+          189770.847,
+          62084.737,
+          29.08,
+          648.693,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "飞沙",
+      "pqx": [
+        [
+          0,
+          189103.262,
+          63068.061,
+          358.0052,
+          517.094,
+          2200,
+          2200,
+          1
+        ],
+        [
+          517.094,
+          189617.396,
+          63110.764,
+          11.2944,
+          395.239,
+          2500,
+          2500,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "横一",
+      "pqx": [
+        [
+          0,
+          190434.885,
+          61787.325,
+          119.08,
+          835.972,
+          0,
+          0,
+          0
+        ],
+        [
+          835.972,
+          190027.897,
+          62517.537,
+          119.08,
+          50,
+          0,
+          420,
+          -1
+        ],
+        [
+          885.972,
+          190004.43,
+          62561.679,
+          115.4322,
+          87.474,
+          420,
+          420,
+          -1
+        ],
+        [
+          973.446,
+          189974.916,
+          62643.856,
+          103.4723,
+          50,
+          420,
+          0,
+          -1
+        ],
+        [
+          1023.446,
+          189964.935,
+          62692.841,
+          100.2246,
+          120.709,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "横二",
+      "pqx": [
+        [
+          0,
+          189580.301,
+          61685.542,
+          91.4726,
+          323.787,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "横三",
+      "pqx": [
+        [
+          0,
+          189339.881,
+          61695.206,
+          91.4726,
+          1051.283,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "横四",
+      "pqx": [
+        [
+          0,
+          189792.091,
+          62994.15,
+          111.2628,
+          411.203,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "横五",
+      "pqx": [
+        [
+          0,
+          189503.51,
+          62939.814,
+          98.1356,
+          441.271,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "纵一",
+      "pqx": [
+        [
+          0,
+          189121.768,
+          62223.519,
+          1.4726,
+          201.5,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "纵二",
+      "pqx": [
+        [
+          0,
+          189342.163,
+          63207.396,
+          8.1356,
+          350.102,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "纵三",
+      "pqx": [
+        [
+          0,
+          189091.431,
+          64020.092,
+          28.5623,
+          406.426,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "纵四",
+      "pqx": [
+        [
+          0,
+          189085.4,
+          64505.414,
+          90.424,
+          29,
+          0,
+          40,
+          -1
+        ],
+        [
+          29,
+          189088.516,
+          64534.076,
+          69.5632,
+          25.306,
+          40,
+          40,
+          -1
+        ],
+        [
+          54.306,
+          189103.9,
+          64553.638,
+          33.4139,
+          29,
+          40,
+          0,
+          -1
+        ],
+        [
+          83.306,
+          189131.02,
+          64563.422,
+          12.5528,
+          64.331,
+          0,
+          0,
+          0
+        ],
+        [
+          147.637,
+          189193.721,
+          64577.81,
+          12.5528,
+          29,
+          0,
+          45,
+          -1
+        ],
+        [
+          176.637,
+          189222.386,
+          64581.215,
+          354.2745,
+          29.107,
+          45,
+          45,
+          -1
+        ],
+        [
+          205.744,
+          189248.501,
+          64569.55,
+          317.2406,
+          29,
+          45,
+          0,
+          -1
+        ]
+      ]
+    },
+    {
+      "name": "文字",
+      "pqx": [
+        [
+          0,
+          189111.709,
+          62448.313,
+          1.4726,
+          423.361,
+          0,
+          0,
+          0
+        ],
+        [
+          423.361,
+          189534.863,
+          62461.541,
+          1.4726,
+          572.666,
+          1200,
+          1200,
+          1
+        ],
+        [
+          996.027,
+          190081.581,
+          62612.769,
+          29.08,
+          155.355,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "联合",
+      "pqx": [
+        [
+          0,
+          189336.595,
+          63678.356,
+          0.0605,
+          407.812,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "七一",
+      "pqx": [
+        [
+          0,
+          189379.234,
+          62795.424,
+          95.0831,
+          435.348,
+          0,
+          0,
+          0
+        ],
+        [
+          435.348,
+          189340.217,
+          63229.02,
+          95.0831,
+          80.768,
+          900,
+          900,
+          -1
+        ],
+        [
+          516.116,
+          189336.595,
+          63309.68,
+          90,
+          845.971,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "十顷",
+      "pqx": [
+        [
+          0,
+          189917.172,
+          63093.803,
+          117.1509,
+          658.097,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "潭州",
+      "pqx": [
+        [
+          0,
+          189099.436,
+          63375.936,
+          0.0605,
+          811.794,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "大福",
+      "pqx": [
+        [
+          0,
+          189097.572,
+          63525.933,
+          0.0605,
+          730.799,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "生元",
+      "pqx": [
+        [
+          0,
+          189367.4,
+          62926.937,
+          3.4051,
+          528.189,
+          2300,
+          2300,
+          1
+        ],
+        [
+          528.189,
+          189886.002,
+          63020.807,
+          16.5019,
+          25,
+          0,
+          41,
+          1
+        ],
+        [
+          553.189,
+          189908.978,
+          63030.397,
+          34.1825,
+          46.723,
+          41,
+          41,
+          1
+        ],
+        [
+          599.912,
+          189926.295,
+          63071.102,
+          99.3601,
+          25,
+          41,
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "凤凰桥",
+      "pqx": [
+        [
+          0,
+          191217.68,
+          63529.008,
+          209.3123,
+          1025.88,
+          0,
+          0,
+          0
+        ],
+        [
+          1025.88,
+          190325.003,
+          63023.481,
+          209.3123,
+          300,
+          0,
+          1400,
+          -1
+        ],
+        [
+          1325.88,
+          190058.98,
+          62885.134,
+          203.2303,
+          475.387,
+          1400,
+          1400,
+          -1
+        ],
+        [
+          1801.266,
+          189599.25,
+          62773.433,
+          183.5543,
+          300,
+          1400,
+          0,
+          -1
+        ],
+        [
+          2101.266,
+          189299.404,
+          62774.291,
+          177.4723,
+          585.625,
+          0,
+          0,
+          0
+        ],
+        [
+          2686.891,
+          188714.215,
+          62796.875,
+          177.4723,
+          200,
+          0,
+          1800,
+          -1
+        ],
+        [
+          2886.891,
+          188514.568,
+          62808.285,
+          174.3624,
+          330.138,
+          1800,
+          1800,
+          -1
+        ],
+        [
+          3217.029,
+          188190.569,
+          62869.197,
+          164.0553,
+          200,
+          1800,
+          0,
+          -1
+        ],
+        [
+          3417.029,
+          188000.409,
+          62931.071,
+          160.5454,
+          1554.842,
+          0,
+          0,
+          0
+        ],
+        [
+          4971.871,
+          186531.028,
+          63439.454,
+          160.5454,
+          150,
+          0,
+          1000,
+          -1
+        ],
+        [
+          5121.871,
+          186390.578,
+          63492.014,
+          156.3704,
+          686.471,
+          1000,
+          1000,
+          -1
+        ],
+        [
+          5808.342,
+          185898.71,
+          63951.46,
+          117.171,
+          150,
+          1000,
+          0,
+          -1
+        ],
+        [
+          5958.342,
+          185836.709,
+          64088.005,
+          112.592,
+          393.371,
+          0,
+          0,
+          0
+        ],
+        [
+          6351.716,
+          185683.075,
+          64450.138,
+          112.592,
+          797.16,
+          3500,
+          3500,
+          1
+        ],
+        [
+          7148.872,
+          185291.219,
+          65142.354,
+          126.0218,
+          316.278,
+          0,
+          0,
+          0
+        ]
+      ]
+    }
+  ]
+};
+
+// ========================================================================
+// 3. 核心逻辑
+// ========================================================================
+let roadList = [], fourParams = null, projectionType = 'utm', currentPos = null, controlLonLat = null;
+let currentRoadIndex = 0;
+let allRoadPoints = [];
+let showStakes = true;
+
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d');
+
+// 变换状态
+let transform = {
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+    minScale: 0.00001,
+    maxScale: 100
+};
+
+// 手势状态
+let isDragging = false;
+let dragStartX = 0, dragStartY = 0;
+let isPinched = false;
+let startDistance = 0;
+let lastScale = 1;
+let startTouchCenterX = 0, startTouchCenterY = 0;
+let startOffsetX = 0, startOffsetY = 0;
+
+// UI 元素
+const infoBar = document.getElementById('info-bar');
+const locateBtn = document.getElementById('locate-btn');
+const roadSelector = document.getElementById('road-selector');
+const resetAllBtn = document.getElementById('reset-all-btn');
+const toggleStakesBtn = document.getElementById('toggleStakesBtn');
+
+// ---- 辅助函数 ----
+function getProjection() {
+    if (CONFIG.proj && CONFIG.proj.toLowerCase().includes('gao')) return 'gao';
+    return 'utm';
+}
+
+function generateRoadPoints(road) {
+    if (!road.pqx || road.pqx.length < 1) return [];
+    const pts = LL.hua_Dantiaoxianlu(road.pqx, null, null, 25, 0, 0);
+    if (!pts || pts.length === 0) return [];
+    const result = [];
+    for (const pt of pts) {
+        result.push({ x: pt[1], y: pt[2], stake: pt[0], azimuth: pt[3] });
+    }
+    return result;
+}
+
+function planToScreen(px, py) {
+    return {
+        x: py * transform.scale + transform.offsetX,
+        y: -px * transform.scale + transform.offsetY
+    };
+}
+
+// ---- 绘制函数 ----
+function draw() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+    const W = rect.width;
+    const H = rect.height;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, W, H);
+
+    if (!allRoadPoints || allRoadPoints.length === 0) {
+        ctx.fillStyle = '#666';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('加载道路数据...', W/2, H/2);
+        return;
+    }
+
+    const colors = ['#2b7be4', '#e67e22', '#27ae60', '#8e44ad', '#e74c3c', '#1abc9c', '#f1c40f'];
+
+    // 1. 绘制所有道路线条
+    for (let ri = 0; ri < allRoadPoints.length; ri++) {
+        const road = allRoadPoints[ri];
+        const pts = road.points || [];
+        if (pts.length < 2) continue;
+        const isCurrent = (ri === currentRoadIndex);
+        const color = isCurrent ? colors[ri % colors.length] : colors[ri % colors.length] + '88';
+        const lineWidth = isCurrent ? 3 : 1.5;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        let first = true;
+        for (const p of pts) {
+            const screen = planToScreen(p.x, p.y);
+            if (first) { ctx.moveTo(screen.x, screen.y); first = false; }
+            else ctx.lineTo(screen.x, screen.y);
+        }
+        ctx.stroke();
+    }
+
+    // 2. 绘制所有道路名称（平行于路线）
+    const zoomLevel = transform.scale;
+    const showRouteNames = zoomLevel > 0.000003;
+
+    if (showRouteNames) {
+        for (let ri = 0; ri < allRoadPoints.length; ri++) {
+            const road = allRoadPoints[ri];
+            const pts = road.points || [];
+            if (pts.length < 2) continue;
+            const isCurrent = (ri === currentRoadIndex);
+            const mid = Math.floor(pts.length / 2);
+            if (mid < pts.length) {
+                const p = pts[mid];
+                const screen = planToScreen(p.x, p.y);
+                if (screen.x >= -50 && screen.x <= W + 50 && screen.y >= -50 && screen.y <= H + 50) {
+                    const roadName = road.name || '未命名';
+                    
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = isCurrent ? '#fff' : '#ccc';
+                    const az = p.azimuth;
+                    ctx.save();
+                    ctx.translate(screen.x, screen.y);
+                    ctx.rotate(az - Math.PI / 2);
+                    ctx.fillText(roadName, 0, 0);
+                    ctx.restore();
+                }
+            }
+        }
+    }
+
+    // 3. 绘制当前道路的桩号（垂直于路线，不设置对齐属性）
+    if (showStakes) {
+        const currentRoad = allRoadPoints[currentRoadIndex];
+        if (currentRoad) {
+            const pts = currentRoad.points;
+            if (pts.length >= 2) {
+                const scale = transform.scale;
+                // 点列间距为 20 米，期望屏幕间距 60 像素
+                const targetPixel = 60;
+                let step = Math.max(1, Math.round(targetPixel / (20 * scale)));
+                // 完全不设上限，让 step 自由增长，缩小到极端时桩号自动消失
+
+                ctx.font = 'bold 10px sans-serif';
+                ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                ctx.shadowBlur = 4;
+                ctx.fillStyle = '#fff';
+                // 不设置 textAlign 和 textBaseline，使用默认值
+
+                for (let i = 0; i < pts.length; i += step) {
+                    const p = pts[i];
+                    const screen = planToScreen(p.x, p.y);
+                    if (screen.x < -20 || screen.x > W + 20 || screen.y < -20 || screen.y > H + 20) continue;
+                    const stakeStr = LL.hua_Num2K(p.stake);
+                    const az = p.azimuth;
+                    ctx.save();
+                    ctx.translate(screen.x, screen.y);
+                    ctx.rotate(az);
+                    ctx.fillText(stakeStr, 0, 0);
+                    ctx.restore();
+                }
+                ctx.shadowBlur = 0;
+            }
+        }
+    }
+
+    // 4. 当前位置
+    // 4. 当前位置 - 使用五角星
+if (currentPos) {
+    const [x, y] = currentPos;
+    const screen = planToScreen(x, y);
+    ctx.shadowBlur = 0;
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e74c3c';
+    ctx.fillText('★', screen.x, screen.y);
+}
+}
+
+// roundRect polyfill
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        if (r > w/2) r = w/2;
+        if (r > h/2) r = h/2;
+        this.moveTo(x + r, y);
+        this.lineTo(x + w - r, y);
+        this.quadraticCurveTo(x + w, y, x + w, y + r);
+        this.lineTo(x + w, y + h - r);
+        this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        this.lineTo(x + r, y + h);
+        this.quadraticCurveTo(x, y + h, x, y + h - r);
+        this.lineTo(x, y + r);
+        this.quadraticCurveTo(x, y, x + r, y);
+        return this;
+    };
+}
+
+// ---- 自适应视图 ----
+function fitToRoad(roadPoints) {
+    if (!roadPoints || roadPoints.length === 0) return;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of roadPoints) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const W = rect.width;
+    const H = rect.height;
+    const margin = 40;
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    let newScale = Math.min((W - 2*margin) / rangeY, (H - 2*margin) / rangeX);
+    newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    transform.scale = newScale;
+    transform.offsetX = W/2 - centerY * newScale;
+    transform.offsetY = H/2 + centerX * newScale;
+    draw();
+}
+
+function fitToAllRoads() {
+    let allPoints = [];
+    for (const road of allRoadPoints) {
+        allPoints = allPoints.concat(road.points);
+    }
+    fitToRoad(allPoints);
+}
+
+// ---- 更新道路数据 ----
+function updateRoads() {
+    allRoadPoints = [];
+    roadList.forEach((road, idx) => {
+        const pts = generateRoadPoints(road);
+        allRoadPoints.push({
+            name: road.name,
+            points: pts,
+            isCurrent: (idx === currentRoadIndex)
+        });
+    });
+    draw();
+}
+
+// ---- 切换道路 ----
+function switchRoad(idx) {
+    currentRoadIndex = idx;
+    updateRoads();
+    const road = allRoadPoints[idx];
+    if (road && road.points.length > 0) {
+        fitToRoad(road.points);
+    }
+    if (currentPos) updatePosition(null, null);
+}
+
+// ---- 更新位置信息 ----
+function updatePosition(lon, lat) {
+    if (!fourParams || !currentPos) {
+        infoBar.innerHTML = `<div><span class="status">等待定位...</span></div>`;
+        locateBtn.disabled = true;
+        draw();
+        return;
+    }
+    const road = roadList[currentRoadIndex];
+    if (!road) { infoBar.innerHTML = `<div><span class="status">道路数据未加载</span></div>`; return; }
+    const [x, y] = currentPos;
+    const [k, pj] = LL.hua_Fs(road.pqx, x, y);
+    if (k === -1 || k === -2 || k === -3 || (k === 0 && pj === 0)) {
+        infoBar.innerHTML = `<div><span class="status">⚡ 定位在线路范围外</span></div>`;
+        locateBtn.disabled = false;
+        draw();
+        return;
+    }
+    const azRad = LL.hua_Fwj(road.pqx[0][1], road.pqx[0][2], x, y)[1];
+    const azDms = LL.hua_radiansToDMS_度分秒(azRad);
+    const kStr = LL.hua_Num2K(k);
+    infoBar.innerHTML = `
+        <div>
+            <span class="road-name">${road.name}</span>
+            <span class="stake">${kStr}</span><br>
+            <span class="offset">偏距 ${pj.toFixed(2)}m</span>
+         
+        </div>
+    `;
+    locateBtn.disabled = false;
+    draw();
+}
+
+// ---- 定位到当前位置 ----
+function locateToCurrent() {
+    if (!currentPos) return;
+    const [x, y] = currentPos;
+    const rect = canvas.getBoundingClientRect();
+    const W = rect.width;
+    const H = rect.height;
+    const screen = planToScreen(x, y);
+    transform.offsetX += W/2 - screen.x;
+    transform.offsetY += H/2 - screen.y;
+    draw();
+    infoBar.innerHTML = `<div><span class="status">📍 已定位到当前位置</span></div>`;
+    setTimeout(() => { if (currentPos) updatePosition(null, null); }, 1000);
+}
+
+// ---- 重置全部视图 ----
+function resetAllView() {
+    fitToAllRoads();
+}
+
+// ---- 切换桩号显示 ----
+function toggleStakes() {
+    showStakes = !showStakes;
+    toggleStakesBtn.classList.toggle('active');
+    toggleStakesBtn.textContent = showStakes ? '🔢 桩号' : '🔢 隐藏';
+    draw();
+}
+
+// ---- 数据初始化 ----
+function initFromConfig() {
+    if (!CONFIG.data || !CONFIG.roads || CONFIG.roads.length === 0) {
+        infoBar.innerHTML = `<div><span class="status">❌ 请配置 CONFIG 数据</span></div>`;
+        return false;
+    }
+    projectionType = getProjection();
+    const center = CONFIG.center || 0;
+    controlLonLat = CONFIG.data.map(p => [p.L, p.B]);
+
+    const controlXy = CONFIG.data.map(p => [p.x, p.y]);
+    const srcXy = CONFIG.data.map(p => {
+        let projCoord;
+        if (projectionType === 'gao') {
+            const g = LL.hua_Gauss_proj(p.L, p.B, center);
+            projCoord = [g[0], g[1]];
+        } else {
+            const u = LL.hua_Utm_proj(p.L, p.B);
+            projCoord = [u[0], u[1]];
+        }
+        return projCoord;
+    });
+    const srcFlat = [], tgtFlat = [];
+    CONFIG.data.forEach((p, i) => {
+        srcFlat.push(srcXy[i][0], srcXy[i][1]);
+        tgtFlat.push(p.x, p.y);
+    });
+    const [dx, dy, rot, scale] = LL.hua_Cs4(srcFlat, tgtFlat);
+    fourParams = { dx, dy, rot, scale };
+
+    roadList = CONFIG.roads;
+    roadSelector.innerHTML = '';
+    roadList.forEach((r, idx) => {
+        const opt = document.createElement('option');
+        opt.value = idx;
+        opt.textContent = r.name;
+        roadSelector.appendChild(opt);
+    });
+    roadSelector.value = 0;
+    currentRoadIndex = 0;
+
+    updateRoads();
+    const firstRoad = allRoadPoints[0];
+    if (firstRoad && firstRoad.points.length > 0) {
+        fitToRoad(firstRoad.points);
+    }
+
+    locateBtn.addEventListener('click', locateToCurrent);
+    locateBtn.disabled = true;
+    resetAllBtn.addEventListener('click', resetAllView);
+    roadSelector.addEventListener('change', function() { switchRoad(parseInt(this.value)); });
+    toggleStakesBtn.addEventListener('click', toggleStakes);
+
+    return true;
+}
+
+// ---- GPS 定位 ----
+let watchId = null;
+function startGps() {
+    if (!navigator.geolocation) {
+        infoBar.innerHTML = `<div><span class="status">❌ 浏览器不支持GPS</span></div>`;
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const lon = pos.coords.longitude;
+            const lat = pos.coords.latitude;
+            const center = CONFIG.center || 0;
+            let projCoord;
+            if (projectionType === 'gao') {
+                const g = LL.hua_Gauss_proj(lon, lat, center);
+                projCoord = [g[0], g[1]];
+            } else {
+                const u = LL.hua_Utm_proj(lon, lat);
+                projCoord = [u[0], u[1]];
+            }
+            const [northing, easting] = projCoord;
+            const [x, y] = LL.hua_FourParameterTransform(northing, easting,
+                fourParams.dx, fourParams.dy, fourParams.rot, fourParams.scale);
+            currentPos = [x, y];
+            updatePosition(lon, lat);
+            locateBtn.disabled = false;
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            watchId = navigator.geolocation.watchPosition(
+                (pos2) => {
+                    const lon2 = pos2.coords.longitude;
+                    const lat2 = pos2.coords.latitude;
+                    let projCoord2;
+                    if (projectionType === 'gao') {
+                        const g2 = LL.hua_Gauss_proj(lon2, lat2, center);
+                        projCoord2 = [g2[0], g2[1]];
+                    } else {
+                        const u2 = LL.hua_Utm_proj(lon2, lat2);
+                        projCoord2 = [u2[0], u2[1]];
+                    }
+                    const [northing2, easting2] = projCoord2;
+                    const [x2, y2] = LL.hua_FourParameterTransform(northing2, easting2,
+                        fourParams.dx, fourParams.dy, fourParams.rot, fourParams.scale);
+                    currentPos = [x2, y2];
+                    updatePosition(lon2, lat2);
+                    locateBtn.disabled = false;
+                },
+                (err) => {},
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+            );
+        },
+        (err) => {
+            infoBar.innerHTML = `<div><span class="status">⚠️ 定位失败: ${err.message}</span></div>`;
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+}
+
+// ---- 手势处理 ----
+canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+        isDragging = true;
+        isPinched = false;
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        dragStartX = touch.clientX - rect.left - transform.offsetX;
+        dragStartY = touch.clientY - rect.top - transform.offsetY;
+    } else if (e.touches.length === 2) {
+        isDragging = false;
+        isPinched = true;
+        const rect = canvas.getBoundingClientRect();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        startDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        startTouchCenterX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        startTouchCenterY = (t1.clientY + t2.clientY) / 2 - rect.top;
+        lastScale = transform.scale;
+        startOffsetX = transform.offsetX;
+        startOffsetY = transform.offsetY;
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (isDragging && e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const clientX = touch.clientX - rect.left;
+        const clientY = touch.clientY - rect.top;
+        transform.offsetX = clientX - dragStartX;
+        transform.offsetY = clientY - dragStartY;
+        draw();
+    } else if (isPinched && e.touches.length === 2) {
+        const rect = canvas.getBoundingClientRect();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const currentDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        if (startDistance > 0) {
+            const currentCenterX = (t1.clientX + t2.clientX) / 2 - rect.left;
+            const currentCenterY = (t1.clientY + t2.clientY) / 2 - rect.top;
+            const factor = currentDistance / startDistance;
+            let newScale = lastScale * factor;
+            newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+            const ratio = newScale / lastScale;
+            transform.offsetX = currentCenterX - (startTouchCenterX - startOffsetX) * ratio;
+            transform.offsetY = currentCenterY - (startTouchCenterY - startOffsetY) * ratio;
+            transform.scale = newScale;
+            draw();
+        }
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    if (e.touches.length === 0) {
+        isDragging = false;
+        isPinched = false;
+    } else if (e.touches.length === 1) {
+        isDragging = true;
+        isPinched = false;
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        dragStartX = touch.clientX - rect.left - transform.offsetX;
+        dragStartY = touch.clientY - rect.top - transform.offsetY;
+    }
+});
+
+// ---- 鼠标事件 ----
+canvas.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    const rect = canvas.getBoundingClientRect();
+    dragStartX = e.clientX - rect.left - transform.offsetX;
+    dragStartY = e.clientY - rect.top - transform.offsetY;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    transform.offsetX = e.clientX - rect.left - dragStartX;
+    transform.offsetY = e.clientY - rect.top - dragStartY;
+    draw();
+});
+
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const delta = e.deltaY > 0 ? -0.05 : 0.05;
+    const oldScale = transform.scale;
+    let newScale = oldScale * (1 + delta);
+    newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+    const ratio = newScale / oldScale;
+    transform.offsetX = cx - (cx - transform.offsetX) * ratio;
+    transform.offsetY = cy - (cy - transform.offsetY) * ratio;
+    transform.scale = newScale;
+    draw();
+}, { passive: false });
+
+// ---- 启动 ----
+window.addEventListener('load', function() {
+    if (initFromConfig()) {
+        startGps();
+    }
+});
+</script>
+</body>
+</html>
