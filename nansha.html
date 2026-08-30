@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>道路桩号 · 纯平面坐标</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; overflow: hidden; height: 100vh; }
+        #canvasWrapper { position: relative; width: 100vw; height: 100vh; background: #1a1a2e; touch-action: none; overflow: hidden; }
+        #mainCanvas { display: block; width: 100%; height: 100%; background: #1a1a2e; touch-action: none; cursor: grab; }
+        #mainCanvas:active { cursor: grabbing; }
+        #info-bar {
+            position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.75); backdrop-filter: blur(8px); color: #fff;
+            padding: 8px 16px; border-radius: 10px; z-index: 10;
+            text-align: left; font-size: 0.9rem; line-height: 1.5;
+            pointer-events: none; border: 1px solid rgba(255,255,255,0.1);
+            min-width: 180px;
+        }
+        #info-bar .stake { font-weight: 700; color: #4fc3f7; }
+        #info-bar .offset { color: #fff; }
+        #info-bar .azimuth { color: #ffb74d; }
+        #info-bar .status { color: #ef9a9a; }
+        .top-left-buttons {
+            position: absolute; top: 12px; left: 12px; z-index: 10;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .top-left-buttons button {
+            background: rgba(255,255,255,0.9); border: none; border-radius: 8px;
+            padding: 6px 12px; font-size: 0.8rem; font-weight: 600; color: #1a3c5e;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; transition: 0.2s;
+            backdrop-filter: blur(4px); display: flex; align-items: center; gap: 4px;
+        }
+        .top-left-buttons button:hover { background: #fff; transform: scale(1.05); }
+        .top-left-buttons button.active { background: #2b7be4; color: #fff; }
+        #road-selector {
+            position: absolute; top: 12px; right: 12px; z-index: 10;
+            background: rgba(255,255,255,0.95); border: none; border-radius: 8px;
+            padding: 6px 12px; font-size: 0.9rem; font-weight: 600; color: #1a3c5e;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; outline: none;
+            max-width: 160px;
+        }
+        #locate-btn, #reset-all-btn {
+            position: fixed;
+            background: rgba(255,255,255,0.9); border: none; border-radius: 50%;
+            width: 44px; height: 44px; font-size: 1.4rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; z-index: 1000;
+            display: flex; align-items: center; justify-content: center;
+            transition: 0.2s; padding: 0; line-height: 1; backdrop-filter: blur(4px);
+        }
+        #locate-btn:hover, #reset-all-btn:hover { background: #fff; transform: scale(1.05); }
+        #locate-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+        #locate-btn { bottom: 24px; left: 16px; }
+        #reset-all-btn { bottom: 24px; right: 16px; }
+        @media (max-width: 600px) {
+            #info-bar { top: 8px; padding: 6px 12px; font-size: 0.75rem; min-width: 120px; }
+            #road-selector { top: 8px; right: 8px; padding: 4px 8px; font-size: 0.8rem; max-width: 120px; }
+            .top-left-buttons { top: 8px; left: 8px; }
+            .top-left-buttons button { padding: 4px 8px; font-size: 0.7rem; }
+            #locate-btn, #reset-all-btn { width: 38px; height: 38px; font-size: 1.2rem; }
+            #locate-btn { bottom: 16px; left: 12px; }
+            #reset-all-btn { bottom: 16px; right: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="canvasWrapper">
+        <canvas id="mainCanvas"></canvas>
+        <div class="top-left-buttons">
+            <button id="toggleStakesBtn" class="active">🔢 show</button>
+        </div>
+        <div id="info-bar"><div><span class="status">⏳ 加载中...</span></div></div>
+        <select id="road-selector"></select>
+        <button id="locate-btn" disabled>📍</button>
+        <button id="reset-all-btn">⛶</button>
+    </div>
+
+    <!-- 依赖 -->
+    <script src="./LL.js"></script>
+    <script src="./nansha.js"></script>
+    <script src="./gesture.js"></script>
+
+    <script>
+        // ========================================================================
+        //  主应用逻辑
+        // ========================================================================
+        let roadList = [];
+        let fourParams = null;
+        let projectionType = 'utm';
+        let currentPos = null;
+        let currentRoadIndex = 0;
+        let allRoadPoints = [];
+        let showStakes = true;
+
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const transform = {
+            offsetX: 0,
+            offsetY: 0,
+            scale: 1,
+            minScale: 0.00001,
+            maxScale: 100
+        };
+
+        let gesture = null;
+
+        const infoBar = document.getElementById('info-bar');
+        const locateBtn = document.getElementById('locate-btn');
+        const roadSelector = document.getElementById('road-selector');
+        const resetAllBtn = document.getElementById('reset-all-btn');
+        const toggleStakesBtn = document.getElementById('toggleStakesBtn');
+
+        // ========================================================================
+        //  辅助函数
+        // ========================================================================
+        function getProjection() {
+            if (CONFIG.proj && CONFIG.proj.toLowerCase().includes('gao')) return 'gao';
+            return 'utm';
+        }
+
+        function generateRoadPoints(road) {
+            if (!road.pqx || road.pqx.length < 1) return [];
+            const pts = LL.hua_Dantiaoxianlu(road.pqx, null, null, 20, 0, 0);
+            if (!pts || pts.length === 0) return [];
+            return pts.map(pt => ({ x: pt[1], y: pt[2], stake: pt[0], azimuth: pt[3] }));
+        }
+
+        function planToScreen(px, py) {
+            return {
+                x: py * transform.scale + transform.offsetX,
+                y: -px * transform.scale + transform.offsetY
+            };
+        }
+
+        // ========================================================================
+        //  绘制（颜色统一）
+        // ========================================================================
+        function draw() {
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+            ctx.scale(dpr, dpr);
+
+            const W = rect.width, H = rect.height;
+            ctx.clearRect(0, 0, W, H);
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, W, H);
+
+            if (!allRoadPoints || allRoadPoints.length === 0) {
+                ctx.fillStyle = '#666';
+                ctx.font = '16px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('加载道路数据...', W / 2, H / 2);
+                return;
+            }
+
+            const colors = ['#2b7be4', '#e67e22', '#27ae60', '#8e44ad', '#e74c3c', '#1abc9c', '#f1c40f'];
+
+            // ---- 1. 道路线条 ----
+            for (let ri = 0; ri < allRoadPoints.length; ri++) {
+                const road = allRoadPoints[ri];
+                const pts = road.points || [];
+                if (pts.length < 2) continue;
+                const isCurrent = (ri === currentRoadIndex);
+                const color = isCurrent ? colors[ri % colors.length] : colors[ri % colors.length] + '88';
+                ctx.strokeStyle = color;
+                ctx.lineWidth = isCurrent ? 3 : 1.5;
+                ctx.beginPath();
+                let first = true;
+                for (const p of pts) {
+                    const s = planToScreen(p.x, p.y);
+                    if (first) { ctx.moveTo(s.x, s.y); first = false; } else ctx.lineTo(s.x, s.y);
+                }
+                ctx.stroke();
+            }
+
+            // ---- 2. 道路名称（与线条颜色一致） ----
+            const zoomLevel = transform.scale;
+            const showRouteNames = zoomLevel > 0.000003;
+            if (showRouteNames) {
+                for (let ri = 0; ri < allRoadPoints.length; ri++) {
+                    const road = allRoadPoints[ri];
+                    const pts = road.points || [];
+                    if (pts.length < 2) continue;
+                    const isCurrent = (ri === currentRoadIndex);
+                    const color = isCurrent ? colors[ri % colors.length] : colors[ri % colors.length] + '88';
+                    const mid = Math.floor(pts.length / 2);
+                    if (mid < pts.length) {
+                        const p = pts[mid];
+                        const s = planToScreen(p.x, p.y);
+                        if (s.x >= -50 && s.x <= W + 50 && s.y >= -50 && s.y <= H + 50) {
+                            ctx.shadowBlur = 0;
+                            ctx.fillStyle = color;
+                            ctx.font = 'bold 12px sans-serif';
+                            const az = p.azimuth || 0;
+                            ctx.save();
+                            ctx.translate(s.x, s.y);
+                            ctx.rotate(az - Math.PI / 2);
+                            ctx.textAlign = 'center'
+                            ctx.fillText(road.name || '未命名', 0, 0);
+                            ctx.restore();
+                        }
+                    }
+                }
+            }
+
+            // ---- 3. 桩号（与当前道路线条颜色一致，全彩） ----
+            if (showStakes) {
+                const currentRoad = allRoadPoints[currentRoadIndex];
+                if (currentRoad) {
+                    const pts = currentRoad.points;
+                    if (pts.length >= 2) {
+                        const scale = transform.scale;
+                        const targetPixel = 60;
+                        let step = Math.max(1, Math.round(targetPixel / (20 * scale)));
+                        ctx.font = 'bold 10px sans-serif';
+                        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                        ctx.shadowBlur = 4;
+                        ctx.fillStyle = colors[currentRoadIndex % colors.length];
+                        for (let i = 0; i < pts.length; i += step) {
+                            const p = pts[i];
+                            const s = planToScreen(p.x, p.y);
+                            if (s.x < -20 || s.x > W + 20 || s.y < -20 || s.y > H + 20) continue;
+                            const stakeStr = LL.hua_Num2K(p.stake);
+                            const az = p.azimuth || 0;
+                            ctx.save();
+                            ctx.translate(s.x, s.y);
+                            ctx.rotate(az);
+                            ctx.fillText(stakeStr, 0, 0);
+                            ctx.restore();
+                        }
+                        ctx.shadowBlur = 0;
+                    }
+                }
+            }
+
+            // ---- 4. 当前位置 ----
+            if (currentPos) {
+                const [x, y] = currentPos;
+                const s = planToScreen(x, y);
+                ctx.font = '24px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('🚶', s.x, s.y);
+                const grad = ctx.createRadialGradient(s.x, s.y, 4, s.x, s.y, 30);
+                grad.addColorStop(0, 'rgba(255,255,255,0.3)');
+                grad.addColorStop(1, 'rgba(255,255,255,0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, 30, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // ========================================================================
+        //  视图控制
+        // ========================================================================
+        function fitToRoad(roadPoints) {
+            if (!roadPoints || roadPoints.length === 0) return;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const p of roadPoints) {
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.y > maxY) maxY = p.y;
+            }
+            const rect = canvas.getBoundingClientRect();
+            const W = rect.width, H = rect.height;
+            const margin = 40;
+            const rangeX = maxX - minX || 1;
+            const rangeY = maxY - minY || 1;
+            let newScale = Math.min((W - 2 * margin) / rangeY, (H - 2 * margin) / rangeX);
+            newScale = Math.min(transform.maxScale, Math.max(transform.minScale, newScale));
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+            const newOffsetX = W / 2 - centerY * newScale;
+            const newOffsetY = H / 2 + centerX * newScale;
+
+            if (gesture) {
+                gesture.setTransform(newOffsetX, newOffsetY, newScale);
+            } else {
+                transform.offsetX = newOffsetX;
+                transform.offsetY = newOffsetY;
+                transform.scale = newScale;
+                draw();
+            }
+        }
+
+        function fitToAllRoads() {
+            let allPoints = [];
+            for (const road of allRoadPoints) allPoints = allPoints.concat(road.points);
+            fitToRoad(allPoints);
+        }
+
+        // ========================================================================
+        //  道路管理
+        // ========================================================================
+        function updateRoads() {
+            allRoadPoints = roadList.map((road, idx) => ({
+                name: road.name,
+                points: generateRoadPoints(road),
+                isCurrent: (idx === currentRoadIndex)
+            }));
+            draw();
+        }
+
+        function switchRoad(idx) {
+            currentRoadIndex = idx;
+            updateRoads();
+            const road = allRoadPoints[idx];
+            if (road && road.points.length > 0) fitToRoad(road.points);
+            if (currentPos) updatePosition(null, null);
+        }
+
+        // ========================================================================
+        //  位置与信息
+        // ========================================================================
+        function updatePosition(lon, lat) {
+            if (!fourParams || !currentPos) {
+                infoBar.innerHTML = `<div><span class="status">📍 等待定位...</span></div>`;
+                locateBtn.disabled = true;
+                draw();
+                return;
+            }
+            const road = roadList[currentRoadIndex];
+            if (!road) {
+                infoBar.innerHTML = `<div><span class="status">❌ 道路未加载</span></div>`;
+                return;
+            }
+            const [x, y] = currentPos;
+            const [k, pj] = LL.hua_Fs(road.pqx, x, y);
+            if (k === -1 || k === -2 || k === -3 || (k === 0 && pj === 0)) {
+                infoBar.innerHTML = `<div><span class="status">⚡ 偏离路线 ⚡</span></div>`;
+                locateBtn.disabled = false;
+                draw();
+                return;
+            }
+            const azRad = LL.hua_Fwj(road.pqx[0][1], road.pqx[0][2], x, y)[1];
+            const azDms = LL.hua_radiansToDMS_度分秒(azRad);
+            const kStr = LL.hua_Num2K(k);
+            infoBar.innerHTML = `
+                <div>
+                    <span class="stake">${kStr}</span><br>
+                    <span class="offset">偏距: ${pj.toFixed(0)}m</span><br>
+                    <span class="azimuth">方位: ${azDms}</span>
+                </div>
+            `;
+            locateBtn.disabled = false;
+            draw();
+        }
+
+        function locateToCurrent() {
+            if (!currentPos) return;
+            const [x, y] = currentPos;
+            const rect = canvas.getBoundingClientRect();
+            const W = rect.width, H = rect.height;
+            const s = planToScreen(x, y);
+            const newOffsetX = transform.offsetX + W / 2 - s.x;
+            const newOffsetY = transform.offsetY + H / 2 - s.y;
+            if (gesture) {
+                gesture.setTransform(newOffsetX, newOffsetY, transform.scale);
+            } else {
+                transform.offsetX = newOffsetX;
+                transform.offsetY = newOffsetY;
+                draw();
+            }
+            infoBar.innerHTML = `<div><span class="status">📍 已定位</span></div>`;
+            setTimeout(() => { if (currentPos) updatePosition(null, null); }, 800);
+        }
+
+        function resetAllView() { fitToAllRoads(); }
+
+        function toggleStakes() {
+            showStakes = !showStakes;
+            toggleStakesBtn.classList.toggle('active');
+            toggleStakesBtn.textContent = showStakes ? '🔢 show' : '🔢 hide';
+            draw();
+        }
+
+        // ========================================================================
+        //  初始化
+        // ========================================================================
+        function initFromConfig() {
+            if (!CONFIG.data || !CONFIG.roads || CONFIG.roads.length === 0) {
+                infoBar.innerHTML = `<div><span class="status">❌ 请配置 CONFIG</span></div>`;
+                return false;
+            }
+            projectionType = getProjection();
+            const center = CONFIG.center || 0;
+            const srcXy = CONFIG.data.map(p => {
+                if (projectionType === 'gao') {
+                    const g = LL.hua_Gauss_proj(p.L, p.B, center);
+                    return [g[0], g[1]];
+                } else {
+                    const u = LL.hua_Utm_proj(p.L, p.B);
+                    return [u[0], u[1]];
+                }
+            });
+            const srcFlat = [], tgtFlat = [];
+            CONFIG.data.forEach((p, i) => {
+                srcFlat.push(srcXy[i][0], srcXy[i][1]);
+                tgtFlat.push(p.x, p.y);
+            });
+            const [dx, dy, rot, scale] = LL.hua_Cs4(srcFlat, tgtFlat);
+            fourParams = { dx, dy, rot, scale };
+
+            roadList = CONFIG.roads;
+            roadSelector.innerHTML = '';
+            roadList.forEach((r, idx) => {
+                const opt = document.createElement('option');
+                opt.value = idx;
+                opt.textContent = r.name;
+                roadSelector.appendChild(opt);
+            });
+            roadSelector.value = 0;
+            currentRoadIndex = 0;
+
+            updateRoads();
+
+            // 创建手势控制器
+            gesture = new GestureController(canvas, {
+                onTransform: (offsetX, offsetY, scale) => {
+                    transform.offsetX = offsetX;
+                    transform.offsetY = offsetY;
+                    transform.scale = scale;
+                    draw();
+                },
+                minScale: transform.minScale,
+                maxScale: transform.maxScale
+            });
+
+            // 适配到第一条道路
+            const firstRoad = allRoadPoints[0];
+            if (firstRoad && firstRoad.points.length > 0) {
+                fitToRoad(firstRoad.points);
+            }
+
+            locateBtn.addEventListener('click', locateToCurrent);
+            locateBtn.disabled = true;
+            resetAllBtn.addEventListener('click', resetAllView);
+            roadSelector.addEventListener('change', function() { switchRoad(parseInt(this.value)); });
+            toggleStakesBtn.addEventListener('click', toggleStakes);
+
+            infoBar.innerHTML = `<div><span class="status">📍 等待定位...</span></div>`;
+            return true;
+        }
+
+        // ========================================================================
+        //  GPS
+        // ========================================================================
+        let watchId = null;
+
+        function startGps() {
+            if (!navigator.geolocation) {
+                infoBar.innerHTML = `<div><span class="status">❌ 浏览器不支持GPS</span></div>`;
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const lon = pos.coords.longitude, lat = pos.coords.latitude;
+                    const center = CONFIG.center || 0;
+                    let projCoord;
+                    if (projectionType === 'gao') {
+                        const g = LL.hua_Gauss_proj(lon, lat, center);
+                        projCoord = [g[0], g[1]];
+                    } else {
+                        const u = LL.hua_Utm_proj(lon, lat);
+                        projCoord = [u[0], u[1]];
+                    }
+                    const [northing, easting] = projCoord;
+                    const [x, y] = LL.hua_FourParameterTransform(northing, easting,
+                        fourParams.dx, fourParams.dy, fourParams.rot, fourParams.scale);
+                    currentPos = [x, y];
+                    updatePosition(lon, lat);
+                    locateBtn.disabled = false;
+                    if (watchId) navigator.geolocation.clearWatch(watchId);
+                    watchId = navigator.geolocation.watchPosition(
+                        (pos2) => {
+                            const lon2 = pos2.coords.longitude, lat2 = pos2.coords.latitude;
+                            let projCoord2;
+                            if (projectionType === 'gao') {
+                                const g2 = LL.hua_Gauss_proj(lon2, lat2, center);
+                                projCoord2 = [g2[0], g2[1]];
+                            } else {
+                                const u2 = LL.hua_Utm_proj(lon2, lat2);
+                                projCoord2 = [u2[0], u2[1]];
+                            }
+                            const [northing2, easting2] = projCoord2;
+                            const [x2, y2] = LL.hua_FourParameterTransform(northing2, easting2,
+                                fourParams.dx, fourParams.dy, fourParams.rot, fourParams.scale);
+                            currentPos = [x2, y2];
+                            updatePosition(lon2, lat2);
+                            locateBtn.disabled = false;
+                        },
+                        () => {},
+                        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+                    );
+                },
+                (err) => {
+                    infoBar.innerHTML = `<div><span class="status">⚠️ 定位失败: ${err.message}</span></div>`;
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
+            );
+        }
+
+        // ========================================================================
+        //  启动
+        // ========================================================================
+        window.addEventListener('load', function() {
+            if (initFromConfig()) {
+                startGps();
+            }
+        });
+    </script>
+</body>
+</html>
