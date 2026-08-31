@@ -202,7 +202,7 @@
                             ctx.translate(s.x, s.y);
                             ctx.rotate(az - Math.PI / 2);
                             ctx.textAlign = 'center'
-                            ctx.fillText(road.name || '未命名', 0, 0);
+                            ctx.fillText(road.name || '未命名', 0, -2);
                             ctx.restore();
                         }
                     }
@@ -231,7 +231,7 @@
                             ctx.save();
                             ctx.translate(s.x, s.y);
                             ctx.rotate(az);
-                            ctx.fillText(stakeStr, 0, 0);
+                            ctx.fillText(stakeStr, 0, -2);
                             ctx.restore();
                         }
                         ctx.shadowBlur = 0;
